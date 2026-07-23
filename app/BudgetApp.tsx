@@ -12,18 +12,24 @@ import {
 } from "firebase/auth";
 import {
   Timestamp,
+  arrayUnion,
   collection,
   deleteDoc,
   doc,
   getDoc,
+  getDocs,
   increment,
+  limit,
   onSnapshot,
   orderBy,
   query,
   setDoc,
+  updateDoc,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import { auth, db, firebaseReady } from "@/lib/firebase";
+import { decodeBankCsvFile, parseBankCsv } from "@/lib/csv.mjs";
 
 type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "reset" | null;
 type TransactionType = "expense" | "income";
@@ -128,46 +134,6 @@ const displayDate = new Intl.DateTimeFormat("fr-FR", {
   month: "short",
 });
 
-function parseCsv(text: string) {
-  const lines = text.replace(/\r/g, "").split("\n").filter(Boolean);
-  if (lines.length < 2) return [];
-  const delimiter = (lines[0].match(/;/g) || []).length >= (lines[0].match(/,/g) || []).length ? ";" : ",";
-  const split = (line: string) => line.split(delimiter).map((cell) => cell.trim().replace(/^"|"$/g, ""));
-  const headers = split(lines[0]).map((header) =>
-    header.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, ""),
-  );
-  const find = (...names: string[]) => headers.findIndex((header) => names.some((name) => header.includes(name)));
-  const dateIndex = find("date");
-  const labelIndex = find("libelle", "description", "operation");
-  const amountIndex = find("montant", "amount");
-  const debitIndex = find("debit");
-  const creditIndex = find("credit");
-
-  return lines
-    .slice(1)
-    .map((line, index) => {
-      const cells = split(line);
-      const rawAmount = amountIndex >= 0 ? cells[amountIndex] : "";
-      const debit = debitIndex >= 0 ? Number((cells[debitIndex] || "0").replace(/\s/g, "").replace(",", ".")) : 0;
-      const credit = creditIndex >= 0 ? Number((cells[creditIndex] || "0").replace(/\s/g, "").replace(",", ".")) : 0;
-      const signed = rawAmount ? Number(rawAmount.replace(/\s/g, "").replace(",", ".")) : credit || -Math.abs(debit);
-      const rawDate = dateIndex >= 0 ? cells[dateIndex] : "";
-      const [day, month, year] = rawDate.split(/[\/.-]/);
-      const date = year && year.length === 4
-        ? `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`
-        : rawDate || new Date().toISOString().slice(0, 10);
-      return {
-        id: `csv-${index}`,
-        label: labelIndex >= 0 ? cells[labelIndex] || "Opération importée" : "Opération importée",
-        amount: Math.abs(signed || 0),
-        type: signed >= 0 ? ("income" as const) : ("expense" as const),
-        category: "Autre",
-        date,
-      };
-    })
-    .filter((row) => row.amount > 0);
-}
-
 export default function BudgetApp() {
   const [user, setUser] = useState<User | null>(null);
   const [householdId, setHouseholdId] = useState<string | null>(null);
@@ -180,7 +146,9 @@ export default function BudgetApp() {
   const [toast, setToast] = useState("");
   const [activeNav, setActiveNav] = useState("Vue d’ensemble");
   const [selectedPeriod, setSelectedPeriod] = useState("2026-07");
-  const [csvPreview, setCsvPreview] = useState<ReturnType<typeof parseCsv>>([]);
+  const [csvPreview, setCsvPreview] = useState<ReturnType<typeof parseBankCsv>["rows"]>([]);
+  const [csvFileName, setCsvFileName] = useState("");
+  const [csvError, setCsvError] = useState("");
   const [csvAccountId, setCsvAccountId] = useState("");
   const [csvBalanceMode, setCsvBalanceMode] = useState<CsvBalanceMode>("calculate");
   const [csvCustomBalance, setCsvCustomBalance] = useState("");
@@ -192,6 +160,7 @@ export default function BudgetApp() {
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
   const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [monthlyBudget, setMonthlyBudget] = useState(2000);
+  const [memberEmails, setMemberEmails] = useState<string[]>([]);
   const [authResolved, setAuthResolved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -204,6 +173,7 @@ export default function BudgetApp() {
       setUser(currentUser);
       if (!currentUser || !db) {
         setHouseholdId(null);
+        setMemberEmails([]);
         const savedDemo = window.localStorage.getItem("smart-budget-demo");
         if (savedDemo) {
           try {
@@ -231,13 +201,34 @@ export default function BudgetApp() {
         const userSnap = await getDoc(userRef);
         let nextHouseholdId = userSnap.data()?.householdId as string | undefined;
 
+        if (!nextHouseholdId && currentUser.email) {
+          const normalizedEmail = currentUser.email.trim().toLowerCase();
+          const invitedHouseholds = await getDocs(query(
+            collection(db, "households"),
+            where("memberEmails", "array-contains", normalizedEmail),
+            limit(1),
+          ));
+          const invitation = invitedHouseholds.docs[0];
+          if (invitation) {
+            nextHouseholdId = invitation.id;
+            await updateDoc(invitation.ref, { memberIds: arrayUnion(currentUser.uid) });
+            await setDoc(userRef, {
+              email: normalizedEmail,
+              displayName: currentUser.displayName || "",
+              householdId: nextHouseholdId,
+              joinedAt: Timestamp.now(),
+            }, { merge: true });
+          }
+        }
+
         if (!nextHouseholdId) {
           nextHouseholdId = currentUser.uid;
+          const normalizedEmail = currentUser.email?.trim().toLowerCase() || "";
           const batch = writeBatch(db);
           batch.set(doc(db, "households", nextHouseholdId), {
             name: `Foyer de ${currentUser.displayName || currentUser.email?.split("@")[0] || "Smart Budget"}`,
             memberIds: [currentUser.uid],
-            memberEmails: [currentUser.email],
+            memberEmails: normalizedEmail ? [normalizedEmail] : [],
             monthlyBudget: 2000,
             createdAt: Timestamp.now(),
           });
@@ -278,6 +269,7 @@ export default function BudgetApp() {
     const cleanups = [
       onSnapshot(doc(db, "households", householdId), (snapshot) => {
         setMonthlyBudget(Number(snapshot.data()?.monthlyBudget || 2000));
+        setMemberEmails((snapshot.data()?.memberEmails as string[] | undefined) || []);
       }),
       onSnapshot(collection(db, base, "accounts"), (snapshot) => {
         setAccounts(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as Account)));
@@ -374,6 +366,8 @@ export default function BudgetApp() {
 
   const openCsvImport = () => {
     setCsvPreview([]);
+    setCsvFileName("");
+    setCsvError("");
     setCsvAccountId(visibleAccounts[0]?.id || "");
     setCsvBalanceMode("calculate");
     setCsvCustomBalance("");
@@ -382,10 +376,27 @@ export default function BudgetApp() {
 
   const closeCsvImport = () => {
     setCsvPreview([]);
+    setCsvFileName("");
+    setCsvError("");
     setCsvAccountId("");
     setCsvBalanceMode("calculate");
     setCsvCustomBalance("");
     setModal(null);
+  };
+
+  const loadCsvFile = async (file?: File) => {
+    if (!file) return;
+    setCsvFileName(file.name);
+    setCsvError("");
+    setCsvPreview([]);
+    try {
+      const result = parseBankCsv(await decodeBankCsvFile(file));
+      setCsvPreview(result.rows);
+      setCsvError(result.error);
+    } catch (error) {
+      console.error("Lecture du fichier CSV impossible", error);
+      setCsvError("Ce fichier n’a pas pu être lu. Vérifiez qu’il s’agit bien d’un export CSV de votre banque.");
+    }
   };
 
   const chooseOperationType = (type: TransactionType) => {
@@ -717,14 +728,54 @@ export default function BudgetApp() {
     setToast("Budget mensuel mis à jour.");
   };
 
+  const inviteMember = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!user || !db || !householdId) {
+      setModal("auth");
+      return;
+    }
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const email = String(data.get("memberEmail") || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      setToast("Indiquez une adresse e-mail valide.");
+      return;
+    }
+    if (memberEmails.includes(email)) {
+      setToast("Cette personne fait déjà partie du foyer ou a déjà été invitée.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      await setDoc(doc(db, "households", householdId), {
+        memberEmails: arrayUnion(email),
+      }, { merge: true });
+      form.reset();
+      setToast(`Invitation enregistrée pour ${email}. Elle rejoindra le foyer à sa prochaine connexion.`);
+    } catch (error) {
+      console.error("Invitation du membre impossible", error);
+      setToast("Cette personne n’a pas pu être ajoutée au foyer.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const resetData = async () => {
     if (!user) {
+      const resetAccounts = demoAccounts.map((account) => ({ ...account, balance: 0 }));
       setTransactions([]);
       setGoals([]);
-      setAccounts(demoAccounts.map((account) => ({ ...account, balance: 0 })));
-      setMonthlyBudget(2000);
+      setAccounts(resetAccounts);
+      setMonthlyBudget(0);
+      window.localStorage.setItem("smart-budget-demo", JSON.stringify({
+        accounts: resetAccounts,
+        transactions: [],
+        goals: [],
+        monthlyBudget: 0,
+      }));
       setModal(null);
-      setToast("Données d’exemple remises à zéro.");
+      setToast("Toutes les données ont été remises à zéro.");
       return;
     }
     if (!db || !householdId) return;
@@ -738,10 +789,14 @@ export default function BudgetApp() {
       visibleAccounts.filter((account) => account.ownerId === user.uid).forEach((account) => {
         batch.update(doc(db, "households", householdId, "accounts", account.id), { balance: 0 });
       });
-      batch.set(doc(db, "households", householdId), { monthlyBudget: 2000 }, { merge: true });
+      batch.set(doc(db, "households", householdId), { monthlyBudget: 0 }, { merge: true });
       await batch.commit();
+      setTransactions((current) => current.filter((item) => item.createdBy && item.createdBy !== user.uid));
+      setGoals([]);
+      setAccounts((current) => current.map((account) => account.ownerId === user.uid ? { ...account, balance: 0 } : account));
+      setMonthlyBudget(0);
       setModal(null);
-      setToast("Vos opérations, projets et soldes ont été remis à zéro.");
+      setToast("Vos opérations, projets, soldes et votre budget ont été remis à zéro.");
     } catch (error) {
       console.error("Remise à zéro impossible", error);
       setToast("La remise à zéro n’a pas pu être effectuée.");
@@ -1070,10 +1125,27 @@ export default function BudgetApp() {
               <div><h2 className="panel-title">{user?.displayName || "Mode découverte"}</h2><p className="muted">{user?.email || "Connectez-vous pour créer votre foyer."}</p></div>
             </div>
             <div className="household-settings">
-              <div><strong>Partage familial</strong><p className="muted">Chaque membre utilise son propre accès Firebase.</p></div>
+              <div className="member-settings">
+                <strong>Partage familial</strong>
+                <p className="muted">Chaque membre utilise son propre accès Firebase et retrouve les données du même foyer.</p>
+                {user ? (
+                  <>
+                    <div className="member-list">
+                      {memberEmails.map((email) => <span className="member-pill" key={email}>{email}</span>)}
+                    </div>
+                    <form className="member-invite-form" onSubmit={inviteMember}>
+                      <label className="label">Adresse e-mail du membre<input className="field" type="email" name="memberEmail" placeholder="exemple@email.com" required /></label>
+                      <button className="btn btn-soft" disabled={isSaving}>{isSaving ? "Ajout…" : "Ajouter au foyer"}</button>
+                    </form>
+                    <small className="muted">La personne rejoindra automatiquement ce foyer lors de sa prochaine connexion avec cette adresse.</small>
+                  </>
+                ) : (
+                  <button className="mini-action" onClick={() => setModal("auth")}>Se connecter pour ajouter un membre</button>
+                )}
+              </div>
               <div><strong>Confidentialité des comptes</strong><p className="muted">Un compte personnel peut rester visible uniquement par son propriétaire.</p></div>
               <div><strong>Budget mensuel</strong><p className="muted">{money.format(monthlyBudget)} · utilisé pour calculer vos pourcentages.</p><button className="mini-action" onClick={() => setModal("budget")}>Modifier le budget</button></div>
-              <div className="danger-zone"><strong>Remise à zéro</strong><p className="muted">Efface les opérations et projets, puis remet les soldes à zéro.</p><button className="btn btn-danger" onClick={() => setModal("reset")}>Remettre mes données à zéro</button></div>
+              <div className="danger-zone"><strong>Remise à zéro</strong><p className="muted">Efface les opérations et projets, puis remet les soldes et le budget mensuel à zéro.</p><button className="btn btn-danger" onClick={() => setModal("reset")}>Remettre mes données à zéro</button></div>
             </div>
             {user ? <button className="btn btn-soft" onClick={() => auth && signOut(auth)}>Se déconnecter</button> : <button className="btn btn-primary" onClick={() => setModal("auth")}>Se connecter ou créer un compte</button>}
           </section>
@@ -1189,7 +1261,7 @@ export default function BudgetApp() {
 
       {modal === "reset" && (
         <Modal title="Remettre les données à zéro" onClose={() => setModal(null)}>
-          <div className="reset-warning"><strong>Cette action est irréversible.</strong><p>Les opérations et projets seront supprimés. Les soldes des comptes seront remis à 0 € et le budget mensuel à 2 000 €.</p></div>
+          <div className="reset-warning"><strong>Cette action est irréversible.</strong><p>Les opérations et projets seront supprimés. Les soldes des comptes et le budget mensuel seront remis à 0 €.</p></div>
           <div className="form-actions"><button className="btn btn-soft" onClick={() => setModal(null)}>Annuler</button><button className="btn btn-danger" onClick={resetData} disabled={isSaving}>{isSaving ? "Remise à zéro…" : "Confirmer la remise à zéro"}</button></div>
         </Modal>
       )}
@@ -1208,14 +1280,20 @@ export default function BudgetApp() {
               </select>
             </label>
           </div>
-          <div className="drop-zone">
+          <div
+            className={`drop-zone ${csvError ? "drop-zone-error" : csvFileName ? "drop-zone-ready" : ""}`}
+            onDragOver={(event) => event.preventDefault()}
+            onDrop={(event) => {
+              event.preventDefault();
+              void loadCsvFile(event.dataTransfer.files?.[0]);
+            }}
+          >
             <strong>Déposez votre export bancaire CSV</strong>
-            <p className="muted">Smart Budget reconnaît les colonnes date, libellé, montant, débit et crédit.</p>
-            <input type="file" accept=".csv,text/csv" onChange={async (event) => {
-              const file = event.target.files?.[0];
-              if (file) setCsvPreview(parseCsv(await file.text()));
-            }} />
+            <p className="muted">Glissez le fichier ici ou choisissez-le. Les exports avec préambule, séparateur « ; » ou « , » et encodage bancaire Windows sont acceptés.</p>
+            <input type="file" accept=".csv,text/csv" onChange={(event) => void loadCsvFile(event.target.files?.[0])} />
+            {csvFileName && <div className="csv-file-name">Fichier sélectionné : <strong>{csvFileName}</strong></div>}
           </div>
+          {csvError && <div className="csv-error" role="alert"><strong>Import impossible</strong><span>{csvError}</span><small>Colonnes attendues : Date, Libellé et Montant — ou Débit / Crédit.</small></div>}
           {csvPreview.length > 0 && (
             <>
               <div className="import-preview">

@@ -203,6 +203,10 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .household-settings { display: grid; gap: 12px; }
 .household-settings > div { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: #f8faf6; }
 .household-settings p { margin: 5px 0 0; }
+.member-settings { display: grid; gap: 10px; }
+.member-list { display: flex; flex-wrap: wrap; gap: 7px; }
+.member-pill { padding: 6px 9px; border-radius: 999px; background: #edf4ef; color: var(--green-dark); font-size: 12px; font-weight: 700; }
+.member-invite-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 10px; }
 .household-settings .danger-zone { border-color: rgba(188,85,67,.28); background: #fff6f2; }
 .btn-danger { color: #fff; background: #b65343; }
 .reset-warning { padding: 17px; border: 1px solid rgba(188,85,67,.28); border-radius: 14px; color: #7e3428; background: #fff4ef; }
@@ -263,6 +267,11 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .switch-link button { border: 0; background: transparent; color: var(--green-2); font-weight: 800; cursor: pointer; }
 .drop-zone { padding: 28px 20px; border: 2px dashed #bfd0c5; border-radius: 16px; text-align: center; background: #f5f8f3; }
 .drop-zone input { margin-top: 13px; max-width: 100%; }
+.drop-zone-ready { border-color: var(--green); background: #f0f7f2; }
+.drop-zone-error { border-color: #d79085; background: #fff5f3; }
+.csv-file-name { margin-top: 12px; color: var(--ink); font-size: 12px; }
+.csv-error { display: grid; gap: 4px; margin-top: 14px; padding: 13px 14px; border: 1px solid #e5b5ad; border-radius: 13px; background: #fff3f0; color: #8a3428; font-size: 13px; }
+.csv-error small { color: #735f5b; }
 .import-settings { margin-bottom: 14px; }
 .import-preview { margin-top: 16px; padding: 14px; border-radius: 13px; background: #eef4ef; font-size: 13px; }
 .import-summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
@@ -335,6 +344,7 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: auto; }
   .import-summary-grid { grid-template-columns: 1fr; }
+  .member-invite-form { grid-template-columns: 1fr; }
   .amount-input { height: 68px; font-size: 34px; }
   .category-chips { flex-wrap: nowrap; margin-inline: -2px; padding: 2px 2px 7px; overflow-x: auto; }
   .category-chips button { flex: 0 0 auto; }

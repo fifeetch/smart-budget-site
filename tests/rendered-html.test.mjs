@@ -55,7 +55,13 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(app, /csvBalanceMode/);
   assert.match(app, /Solde après l’import/);
   assert.match(app, /Compte \/ solde/);
+  assert.match(app, /loadCsvFile/);
+  assert.match(app, /inviteMember/);
+  assert.match(app, /Ajouter au foyer/);
+  assert.match(app, /setMonthlyBudget\(0\)/);
+  assert.match(app, /decodeBankCsvFile/);
+  assert.match(layout, /Smart Budget/);
+  assert.match(await readFile(new URL("../firestore.rules", import.meta.url), "utf8"), /joinsInvitedHousehold/);
   assert.match(css, /\.monthly-chart/);
   assert.match(css, /\.btn-danger/);
-  assert.match(layout, /Smart Budget/);
 });

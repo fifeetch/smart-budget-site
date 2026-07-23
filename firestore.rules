@@ -11,13 +11,28 @@ service cloud.firestore {
         request.auth.uid in get(/databases/$(database)/documents/households/$(householdId)).data.memberIds;
     }
 
+    function invitedByEmail() {
+      return signedIn() &&
+        request.auth.token.email != null &&
+        request.auth.token.email in resource.data.memberEmails;
+    }
+
+    function joinsInvitedHousehold() {
+      return invitedByEmail() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds']) &&
+        request.resource.data.memberIds.hasAll(resource.data.memberIds) &&
+        request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1 &&
+        request.auth.uid in request.resource.data.memberIds;
+    }
+
     match /users/{userId} {
       allow read, create, update: if signedIn() && request.auth.uid == userId;
     }
 
     match /households/{householdId} {
       allow create: if signedIn() && request.resource.data.memberIds == [request.auth.uid];
-      allow read, update: if householdMember(householdId);
+      allow read: if householdMember(householdId) || invitedByEmail();
+      allow update: if householdMember(householdId) || joinsInvitedHousehold();
 
       match /accounts/{accountId} {
         allow create: if householdMember(householdId);
