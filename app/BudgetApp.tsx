@@ -27,6 +27,7 @@ import { auth, db, firebaseReady } from "@/lib/firebase";
 
 type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "reset" | null;
 type TransactionType = "expense" | "income";
+type CsvBalanceMode = "calculate" | "keep" | "custom";
 
 type Account = {
   id: string;
@@ -180,6 +181,9 @@ export default function BudgetApp() {
   const [activeNav, setActiveNav] = useState("Vue d’ensemble");
   const [selectedPeriod, setSelectedPeriod] = useState("2026-07");
   const [csvPreview, setCsvPreview] = useState<ReturnType<typeof parseCsv>>([]);
+  const [csvAccountId, setCsvAccountId] = useState("");
+  const [csvBalanceMode, setCsvBalanceMode] = useState<CsvBalanceMode>("calculate");
+  const [csvCustomBalance, setCsvCustomBalance] = useState("");
   const [transactionType, setTransactionType] = useState<TransactionType>("expense");
   const [selectedCategory, setSelectedCategory] = useState("Alimentation");
   const [selectedReason, setSelectedReason] = useState("Courses");
@@ -317,6 +321,14 @@ export default function BudgetApp() {
   const balance = visibleAccounts.reduce((sum, account) => sum + Number(account.balance || 0), 0);
   const budgetUsage = monthlyBudget ? Math.min(100, Math.round((expenses / monthlyBudget) * 100)) : 0;
   const remainingBudget = Math.max(0, monthlyBudget - expenses);
+  const selectedCsvAccount = visibleAccounts.find((account) => account.id === csvAccountId);
+  const csvIncome = csvPreview.filter((row) => row.type === "income").reduce((sum, row) => sum + row.amount, 0);
+  const csvExpenses = csvPreview.filter((row) => row.type === "expense").reduce((sum, row) => sum + row.amount, 0);
+  const csvImpact = csvIncome - csvExpenses;
+  const csvProjectedBalance = Number(selectedCsvAccount?.balance || 0) + csvImpact;
+  const parsedCsvCustomBalance = Number(csvCustomBalance.replace(/\s/g, "").replace(",", "."));
+  const csvCustomBalanceIsValid = csvBalanceMode !== "custom"
+    || (csvCustomBalance.trim() !== "" && Number.isFinite(parsedCsvCustomBalance));
   const categoryData = useMemo(() => {
     const totals = new Map<string, number>();
     visibleTransactions.filter((item) => item.type === "expense").forEach((item) => {
@@ -358,6 +370,22 @@ export default function BudgetApp() {
     setSelectedReason(operationReasons.expense.find((reason) => reason.label === label)?.label || operationReasons.expense[0].label);
     setCustomReason("");
     setModal("transaction");
+  };
+
+  const openCsvImport = () => {
+    setCsvPreview([]);
+    setCsvAccountId(visibleAccounts[0]?.id || "");
+    setCsvBalanceMode("calculate");
+    setCsvCustomBalance("");
+    setModal("csv");
+  };
+
+  const closeCsvImport = () => {
+    setCsvPreview([]);
+    setCsvAccountId("");
+    setCsvBalanceMode("calculate");
+    setCsvCustomBalance("");
+    setModal(null);
   };
 
   const chooseOperationType = (type: TransactionType) => {
@@ -724,29 +752,62 @@ export default function BudgetApp() {
 
   const importCsv = async () => {
     if (!csvPreview.length) return;
-    const accountId = visibleAccounts[0]?.id;
-    if (!accountId) return;
-    const totalImpact = csvPreview.reduce((sum, row) => sum + (row.type === "income" ? row.amount : -row.amount), 0);
+    const accountId = csvAccountId;
+    const account = visibleAccounts.find((item) => item.id === accountId);
+    if (!account) {
+      setToast("Sélectionnez le compte concerné par ce relevé.");
+      return;
+    }
+    if (!csvCustomBalanceIsValid) {
+      setToast("Indiquez un solde valide après l’import.");
+      return;
+    }
+    const importedCount = csvPreview.length;
+    const nextBalance = csvBalanceMode === "calculate"
+      ? Number(account.balance || 0) + csvImpact
+      : csvBalanceMode === "custom"
+        ? parsedCsvCustomBalance
+        : null;
     if (!user) {
-      const rows = csvPreview.map((row) => ({ ...row, accountId, createdBy: "demo" }));
+      const importedAt = Date.now();
+      const rows = csvPreview.map((row, index) => ({
+        ...row,
+        id: `local-csv-${importedAt}-${index}`,
+        accountId,
+        createdBy: "demo",
+      }));
       setTransactions((current) => [...rows, ...current]);
-      setAccounts((current) => current.map((account) => account.id === accountId ? { ...account, balance: account.balance + totalImpact } : account));
-      setCsvPreview([]);
-      setModal(null);
+      if (nextBalance !== null) {
+        setAccounts((current) => current.map((item) => item.id === accountId ? { ...item, balance: nextBalance } : item));
+      }
+      closeCsvImport();
       setToast(`${rows.length} opérations importées en mode découverte.`);
       return;
     }
     if (!db || !householdId) return;
-    const batch = writeBatch(db);
-    csvPreview.forEach((row) => {
-      const reference = doc(collection(db, "households", householdId, "transactions"));
-      batch.set(reference, { ...row, accountId, createdBy: user.uid, imported: true, createdAt: Timestamp.now() });
-    });
-    batch.update(doc(db, "households", householdId, "accounts", accountId), { balance: increment(totalImpact) });
-    await batch.commit();
-    setCsvPreview([]);
-    setModal(null);
-    setToast(`${csvPreview.length} opérations importées.`);
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      csvPreview.forEach((row) => {
+        const { id: temporaryId, ...transaction } = row;
+        void temporaryId;
+        const reference = doc(collection(db, "households", householdId, "transactions"));
+        batch.set(reference, { ...transaction, accountId, createdBy: user.uid, imported: true, createdAt: Timestamp.now() });
+      });
+      if (csvBalanceMode === "calculate") {
+        batch.update(doc(db, "households", householdId, "accounts", accountId), { balance: increment(csvImpact) });
+      } else if (csvBalanceMode === "custom") {
+        batch.update(doc(db, "households", householdId, "accounts", accountId), { balance: parsedCsvCustomBalance });
+      }
+      await batch.commit();
+      closeCsvImport();
+      setToast(`${importedCount} opérations importées dans ${account.name}.`);
+    } catch (error) {
+      console.error("Import CSV impossible", error);
+      setToast("Le relevé bancaire n’a pas pu être importé.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const editingTransaction = editingTransactionId ? transactions.find((item) => item.id === editingTransactionId) : undefined;
@@ -888,7 +949,7 @@ export default function BudgetApp() {
                 <div className="account-row" key={account.id}>
                   <span className="account-icon">{account.type === "Épargne" ? "◇" : "▰"}</span>
                   <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type}</div>{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
-                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><button className="mini-action" onClick={() => openAccountEditor(account)}>Modifier</button></div>
+                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><button className="mini-action" onClick={() => openAccountEditor(account)}>Compte / solde</button></div>
                 </div>
               ))}
             </div>
@@ -911,7 +972,7 @@ export default function BudgetApp() {
         <section className="card transactions">
           <div className="panel-head">
             <h2 className="panel-title">Derniers mouvements</h2>
-            <div><button className="text-button" onClick={() => setModal("csv")}>Importer un CSV</button><button className="text-button" onClick={() => setActiveNav("Transactions")}>Tout voir →</button></div>
+            <div><button className="text-button" onClick={openCsvImport}>Importer un CSV</button><button className="text-button" onClick={() => setActiveNav("Transactions")}>Tout voir →</button></div>
           </div>
           <div className="transaction-list">
             {visibleTransactions.length ? visibleTransactions.slice(0, 7).map((transaction) => (
@@ -949,7 +1010,7 @@ export default function BudgetApp() {
           <section className="card transactions view-section">
             <div className="panel-head">
               <div><h2 className="panel-title">Toutes les opérations</h2><p className="muted">Dépenses et revenus de la période sélectionnée.</p></div>
-              <div className="view-actions"><button className="btn btn-soft" onClick={() => setModal("csv")}>Importer un CSV</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
+              <div className="view-actions"><button className="btn btn-soft" onClick={openCsvImport}>Importer un CSV</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
             </div>
             <div className="transaction-list">
               {visibleTransactions.length ? visibleTransactions.map((transaction) => (
@@ -976,7 +1037,7 @@ export default function BudgetApp() {
                 <div className="account-row" key={account.id}>
                   <span className="account-icon">{account.type === "Épargne" ? "◇" : "▰"}</span>
                   <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type}</div>{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
-                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><button className="mini-action" onClick={() => openAccountEditor(account)}>Modifier</button></div>
+                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><button className="mini-action" onClick={() => openAccountEditor(account)}>Compte / solde</button></div>
                 </div>
               ))}
             </div>
@@ -1089,7 +1150,7 @@ export default function BudgetApp() {
       )}
 
       {modal === "account" && (
-        <Modal title={editingAccount ? "Modifier le compte" : "Ajouter un compte"} onClose={() => { setEditingAccountId(null); setModal(null); }}>
+        <Modal title={editingAccount ? "Modifier le compte et son solde" : "Ajouter un compte"} onClose={() => { setEditingAccountId(null); setModal(null); }}>
           <form onSubmit={addAccount}>
             <div className="form-grid">
               <label className="label wide">Nom du compte<input className="field" name="name" placeholder="Ex. Compte joint" defaultValue={editingAccount?.name} required /></label>
@@ -1134,7 +1195,19 @@ export default function BudgetApp() {
       )}
 
       {modal === "csv" && (
-        <Modal title="Importer un relevé bancaire" onClose={() => { setCsvPreview([]); setModal(null); }}>
+        <Modal title="Importer un relevé bancaire" onClose={closeCsvImport}>
+          <div className="import-settings">
+            <label className="label">
+              Compte concerné par le relevé
+              <select className="field" value={csvAccountId} onChange={(event) => {
+                setCsvAccountId(event.target.value);
+                setCsvCustomBalance("");
+              }} required>
+                <option value="">Sélectionner un compte</option>
+                {visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} — {money.format(Number(account.balance || 0))}</option>)}
+              </select>
+            </label>
+          </div>
           <div className="drop-zone">
             <strong>Déposez votre export bancaire CSV</strong>
             <p className="muted">Smart Budget reconnaît les colonnes date, libellé, montant, débit et crédit.</p>
@@ -1143,8 +1216,38 @@ export default function BudgetApp() {
               if (file) setCsvPreview(parseCsv(await file.text()));
             }} />
           </div>
-          {csvPreview.length > 0 && <div className="import-preview"><strong>{csvPreview.length} opérations détectées</strong><br />Dépenses : {money.format(csvPreview.filter((row) => row.type === "expense").reduce((sum, row) => sum + row.amount, 0))}</div>}
-          <div className="form-actions"><button className="btn btn-primary" disabled={!csvPreview.length} onClick={importCsv}>Importer les opérations</button></div>
+          {csvPreview.length > 0 && (
+            <>
+              <div className="import-preview">
+                <strong>{csvPreview.length} opérations détectées</strong>
+                <div className="import-summary-grid">
+                  <span>Dépenses <b>{money.format(csvExpenses)}</b></span>
+                  <span>Revenus <b>{money.format(csvIncome)}</b></span>
+                  <span>Impact total <b>{csvImpact >= 0 ? "+" : "−"} {money.format(Math.abs(csvImpact))}</b></span>
+                </div>
+              </div>
+              <div className="import-balance-card">
+                <label className="label">
+                  Solde après l’import
+                  <select className="field" value={csvBalanceMode} onChange={(event) => setCsvBalanceMode(event.target.value as CsvBalanceMode)}>
+                    <option value="calculate">Recalculer automatiquement avec les opérations</option>
+                    <option value="keep">Conserver le solde actuel</option>
+                    <option value="custom">Définir le solde manuellement</option>
+                  </select>
+                </label>
+                {csvBalanceMode === "calculate" && selectedCsvAccount && (
+                  <p>Solde estimé de <strong>{selectedCsvAccount.name}</strong> : <b>{money.format(csvProjectedBalance)}</b></p>
+                )}
+                {csvBalanceMode === "keep" && selectedCsvAccount && (
+                  <p>Le solde restera à <b>{money.format(Number(selectedCsvAccount.balance || 0))}</b>.</p>
+                )}
+                {csvBalanceMode === "custom" && (
+                  <label className="label">Nouveau solde du compte<input className="field" value={csvCustomBalance} onChange={(event) => setCsvCustomBalance(event.target.value)} inputMode="decimal" placeholder="0,00" required /></label>
+                )}
+              </div>
+            </>
+          )}
+          <div className="form-actions"><button className="btn btn-soft" onClick={closeCsvImport}>Annuler</button><button className="btn btn-primary" disabled={!csvPreview.length || !csvAccountId || !csvCustomBalanceIsValid || isSaving} onClick={importCsv}>{isSaving ? "Import en cours…" : "Importer les opérations"}</button></div>
         </Modal>
       )}
 

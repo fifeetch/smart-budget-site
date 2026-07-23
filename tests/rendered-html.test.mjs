@@ -51,6 +51,10 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(app, /saveMonthlyBudget/);
   assert.match(app, /monthlyData/);
   assert.match(app, /smart-budget-demo/);
+  assert.match(app, /csvAccountId/);
+  assert.match(app, /csvBalanceMode/);
+  assert.match(app, /Solde après l’import/);
+  assert.match(app, /Compte \/ solde/);
   assert.match(css, /\.monthly-chart/);
   assert.match(css, /\.btn-danger/);
   assert.match(layout, /Smart Budget/);

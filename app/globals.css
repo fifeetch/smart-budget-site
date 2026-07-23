@@ -263,7 +263,14 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .switch-link button { border: 0; background: transparent; color: var(--green-2); font-weight: 800; cursor: pointer; }
 .drop-zone { padding: 28px 20px; border: 2px dashed #bfd0c5; border-radius: 16px; text-align: center; background: #f5f8f3; }
 .drop-zone input { margin-top: 13px; max-width: 100%; }
+.import-settings { margin-bottom: 14px; }
 .import-preview { margin-top: 16px; padding: 14px; border-radius: 13px; background: #eef4ef; font-size: 13px; }
+.import-summary-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+.import-summary-grid span { display: grid; gap: 3px; color: var(--muted); }
+.import-summary-grid b { color: var(--ink); }
+.import-balance-card { display: grid; gap: 12px; margin-top: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: var(--paper); }
+.import-balance-card p { margin: 0; color: var(--muted); font-size: 13px; }
+.import-balance-card p b { color: var(--ink); }
 .toast {
   position: fixed; right: 24px; bottom: 24px; z-index: 80; max-width: 360px; padding: 13px 16px;
   border-radius: 13px; color: #fff; background: var(--green); box-shadow: 0 14px 30px rgba(17,54,40,.24);
@@ -327,6 +334,7 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
   .goals-banner { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
   .form-grid .wide { grid-column: auto; }
+  .import-summary-grid { grid-template-columns: 1fr; }
   .amount-input { height: 68px; font-size: 34px; }
   .category-chips { flex-wrap: nowrap; margin-inline: -2px; padding: 2px 2px 7px; overflow-x: auto; }
   .category-chips button { flex: 0 0 auto; }
