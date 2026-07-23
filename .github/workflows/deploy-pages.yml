@@ -1,4 +1,4 @@
-name: Publier Smart Budget sur GitHub Pages
+name: Vérifier Smart Budget
 
 on:
   push:
@@ -8,18 +8,9 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: github-pages
-  cancel-in-progress: true
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  test:
     runs-on: ubuntu-latest
     env:
       NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.NEXT_PUBLIC_FIREBASE_API_KEY }}
@@ -43,17 +34,5 @@ jobs:
       - name: Installer les dépendances
         run: npm ci
 
-      - name: Construire le site statique
-        run: npm run export:github-pages
-
-      - name: Configurer GitHub Pages
-        uses: actions/configure-pages@v5
-
-      - name: Préparer les fichiers à publier
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: github-pages
-
-      - name: Publier
-        id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Construire et tester
+        run: npm test
