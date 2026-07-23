@@ -148,6 +148,9 @@ export default function BudgetApp() {
   const [toast, setToast] = useState("");
   const [activeNav, setActiveNav] = useState("Vue d’ensemble");
   const [csvPreview, setCsvPreview] = useState<ReturnType<typeof parseCsv>>([]);
+  const [transactionType, setTransactionType] = useState<TransactionType>("expense");
+  const [selectedCategory, setSelectedCategory] = useState("Alimentation");
+  const [expenseLabel, setExpenseLabel] = useState("");
 
   useEffect(() => {
     if (!auth) return;
@@ -241,6 +244,35 @@ export default function BudgetApp() {
     setModal(next);
   };
 
+  const openQuickExpense = (category = "Alimentation", label = "") => {
+    setTransactionType("expense");
+    setSelectedCategory(category);
+    setExpenseLabel(label);
+    requireUser("transaction");
+  };
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isTyping = target?.matches("input, textarea, select, [contenteditable='true']");
+      if (!isTyping && !modal && event.key.toLowerCase() === "e") {
+        event.preventDefault();
+        setTransactionType("expense");
+        setSelectedCategory("Alimentation");
+        setExpenseLabel("");
+        if (user) {
+          setModal("transaction");
+        } else {
+          setAuthMode("signin");
+          setModal("auth");
+          setToast("Connectez-vous pour enregistrer vos dépenses.");
+        }
+      }
+    };
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [modal, user]);
+
   const handleAuth = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!auth || !db) return;
@@ -280,8 +312,8 @@ export default function BudgetApp() {
     const transaction = {
       label: String(data.get("label")),
       amount,
-      type: String(data.get("type")) as TransactionType,
-      category: String(data.get("category")),
+      type: transactionType,
+      category: selectedCategory,
       accountId: String(data.get("accountId")),
       date: String(data.get("date")),
       createdBy: user.uid,
@@ -297,6 +329,7 @@ export default function BudgetApp() {
       );
     }
     setModal(null);
+    setExpenseLabel("");
     setToast("Mouvement ajouté au budget.");
   };
 
@@ -391,7 +424,7 @@ export default function BudgetApp() {
             ) : (
               <button className="btn btn-soft" onClick={() => setModal("auth")}>Se connecter</button>
             )}
-            <button className="btn btn-primary" onClick={() => requireUser("transaction")}>＋ Ajouter</button>
+            <button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Dépense rapide</button>
           </div>
         </header>
 
@@ -401,6 +434,25 @@ export default function BudgetApp() {
             <button className="btn btn-lime" onClick={() => { setAuthMode("signup"); setModal("auth"); }}>Créer mon espace</button>
           </div>
         )}
+
+        <section className="quick-expense card" aria-label="Ajouter rapidement une dépense">
+          <div className="quick-expense-copy">
+            <span className="quick-expense-icon">＋</span>
+            <div><strong>Une dépense à noter ?</strong><span>Ajoutez-la maintenant, cela prend moins de 10 secondes.</span></div>
+          </div>
+          <div className="quick-presets">
+            {[
+              ["Alimentation", "Courses", "◒"],
+              ["Transport", "Transport", "↗"],
+              ["Loisirs", "Sortie", "✦"],
+            ].map(([category, label, icon]) => (
+              <button key={category} onClick={() => openQuickExpense(category, label)}>
+                <span>{icon}</span>{label}
+              </button>
+            ))}
+            <button className="quick-main" onClick={() => openQuickExpense()}>＋ Autre dépense</button>
+          </div>
+        </section>
 
         <section className="summary-grid" aria-label="Résumé du budget">
           <SummaryCard label="Solde disponible" value={balance} note="Tous les comptes visibles" accent="var(--green)" />
@@ -477,8 +529,12 @@ export default function BudgetApp() {
       </main>
 
       <nav className="mobile-nav" aria-label="Navigation mobile">
-        {["▦", "↕", "＋", "◎", "♙"].map((icon, index) => <button key={`${icon}-${index}`} className={index === 0 ? "active" : ""} onClick={() => index === 2 && requireUser("transaction")}>{icon}</button>)}
+        {["▦", "↕", "＋", "◎", "♙"].map((icon, index) => <button key={`${icon}-${index}`} aria-label={index === 2 ? "Ajouter une dépense" : undefined} className={index === 0 ? "active" : index === 2 ? "add-mobile" : ""} onClick={() => index === 2 && openQuickExpense()}>{icon}</button>)}
       </nav>
+
+      <button className="expense-fab" onClick={() => openQuickExpense()} aria-label="Ajouter rapidement une dépense">
+        <span>＋</span><strong>Ajouter une dépense</strong><kbd>E</kbd>
+      </button>
 
       {modal === "auth" && (
         <Modal title={authMode === "signin" ? "Bon retour parmi nous" : "Créez votre foyer"} onClose={() => setModal(null)}>
@@ -497,17 +553,39 @@ export default function BudgetApp() {
       )}
 
       {modal === "transaction" && (
-        <Modal title="Ajouter un mouvement" onClose={() => setModal(null)}>
+        <Modal title={transactionType === "expense" ? "Dépense rapide" : "Ajouter un revenu"} onClose={() => setModal(null)}>
           <form onSubmit={addTransaction}>
-            <div className="form-grid">
-              <label className="label wide">Type<select className="field" name="type"><option value="expense">Dépense</option><option value="income">Revenu</option></select></label>
-              <label className="label wide">Libellé<input className="field" name="label" placeholder="Ex. Courses alimentaires" required /></label>
-              <label className="label">Montant<input className="field" name="amount" inputMode="decimal" placeholder="0,00" required /></label>
-              <label className="label">Date<input className="field" type="date" name="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
-              <label className="label">Catégorie<select className="field" name="category">{Object.keys(categoryIcons).map((name) => <option key={name}>{name}</option>)}</select></label>
-              <label className="label">Compte<select className="field" name="accountId">{visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+            <div className="expense-form">
+              <div className="segmented expense-type">
+                <button type="button" className={transactionType === "expense" ? "active" : ""} onClick={() => { setTransactionType("expense"); setSelectedCategory("Alimentation"); }}>Dépense</button>
+                <button type="button" className={transactionType === "income" ? "active" : ""} onClick={() => { setTransactionType("income"); setSelectedCategory("Salaire"); }}>Revenu</button>
+              </div>
+              <label className="label amount-label">
+                Montant
+                <span className="amount-wrap"><input className="field amount-input" name="amount" inputMode="decimal" placeholder="0,00" autoFocus required /><b>€</b></span>
+              </label>
+              <label className="label">
+                Pour quoi ?
+                <input className="field" name="label" value={expenseLabel} onChange={(event) => setExpenseLabel(event.target.value)} placeholder={transactionType === "expense" ? "Ex. Courses, café, essence…" : "Ex. Salaire, remboursement…"} required />
+              </label>
+              <fieldset className="category-fieldset">
+                <legend>Catégorie</legend>
+                <div className="category-chips">
+                  {Object.keys(categoryIcons)
+                    .filter((name) => transactionType === "income" ? ["Salaire", "Autre"].includes(name) : name !== "Salaire")
+                    .map((name) => (
+                      <button type="button" key={name} className={selectedCategory === name ? "active" : ""} onClick={() => setSelectedCategory(name)}>
+                        <span>{categoryIcons[name]}</span>{name}
+                      </button>
+                    ))}
+                </div>
+              </fieldset>
+              <div className="form-grid expense-details">
+                <label className="label">Compte<select className="field" name="accountId">{visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+                <label className="label">Date<input className="field" type="date" name="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
+              </div>
             </div>
-            <div className="form-actions"><button type="button" className="btn btn-soft" onClick={() => setModal(null)}>Annuler</button><button className="btn btn-primary">Ajouter</button></div>
+            <div className="form-actions expense-submit"><button type="button" className="btn btn-soft" onClick={() => setModal(null)}>Annuler</button><button className="btn btn-primary">{transactionType === "expense" ? "Enregistrer la dépense" : "Enregistrer le revenu"}</button></div>
           </form>
         </Modal>
       )}
