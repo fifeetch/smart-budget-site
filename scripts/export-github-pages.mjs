@@ -5,7 +5,10 @@ import { pathToFileURL } from "node:url";
 const repositoryName = process.env.GITHUB_REPOSITORY?.split("/")[1] ?? "smart-budget";
 const basePath = `/${repositoryName}`;
 const projectRoot = process.cwd();
-const outputDirectory = path.join(projectRoot, "github-pages");
+const outputDirectory = path.resolve(
+  projectRoot,
+  process.env.GITHUB_PAGES_OUTPUT_DIRECTORY ?? "github-pages",
+);
 const workerFile = path.join(projectRoot, "dist", "server", "index.js");
 const clientDirectory = path.join(projectRoot, "dist", "client");
 
@@ -41,10 +44,8 @@ let html = await response.text();
 
 // GitHub Pages serves project sites below /<repository>/.
 html = html
-  .replaceAll('="/assets/', `="${basePath}/assets/`)
-  .replaceAll("='/assets/", `='${basePath}/assets/`)
-  .replaceAll('="/favicon.svg"', `="${basePath}/favicon.svg"`)
-  .replaceAll("='/favicon.svg'", `='${basePath}/favicon.svg'`)
+  .replaceAll("/assets/", `${basePath}/assets/`)
+  .replaceAll("/favicon.svg", `${basePath}/favicon.svg`)
   .replaceAll(
     "https://fifeetch.github.io/og.png",
     `https://fifeetch.github.io${basePath}/og.png`,
