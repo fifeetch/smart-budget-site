@@ -12,10 +12,11 @@ import {
 } from "firebase/auth";
 import {
   Timestamp,
-  addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
+  increment,
   onSnapshot,
   orderBy,
   query,
@@ -24,7 +25,7 @@ import {
 } from "firebase/firestore";
 import { auth, db, firebaseReady } from "@/lib/firebase";
 
-type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | null;
+type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "reset" | null;
 type TransactionType = "expense" | "income";
 
 type Account = {
@@ -86,6 +87,8 @@ const operationReasons: Record<TransactionType, { label: string; category: strin
     { label: "Autre revenu", category: "Autre" },
   ],
 };
+
+const chartColors = ["var(--green)", "var(--coral)", "var(--yellow)", "var(--mint)", "#7ca7d8", "#b58ad3", "#89b9a1"];
 
 const navigationItems = [
   ["▦", "Vue d’ensemble"],
@@ -180,16 +183,42 @@ export default function BudgetApp() {
   const [transactionType, setTransactionType] = useState<TransactionType>("expense");
   const [selectedCategory, setSelectedCategory] = useState("Alimentation");
   const [selectedReason, setSelectedReason] = useState("Courses");
+  const [customReason, setCustomReason] = useState("");
+  const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
+  const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
+  const [monthlyBudget, setMonthlyBudget] = useState(2000);
+  const [authResolved, setAuthResolved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    if (!auth) return;
+    if (!auth) {
+      setAuthResolved(true);
+      return;
+    }
     return onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
       if (!currentUser || !db) {
         setHouseholdId(null);
-        setAccounts(demoAccounts);
-        setTransactions(demoTransactions);
-        setGoals(demoGoals);
+        const savedDemo = window.localStorage.getItem("smart-budget-demo");
+        if (savedDemo) {
+          try {
+            const parsed = JSON.parse(savedDemo) as { accounts?: Account[]; transactions?: Transaction[]; goals?: Goal[]; monthlyBudget?: number };
+            setAccounts(parsed.accounts || demoAccounts);
+            setTransactions(parsed.transactions || demoTransactions);
+            setGoals(parsed.goals || demoGoals);
+            setMonthlyBudget(parsed.monthlyBudget || 2000);
+          } catch {
+            setAccounts(demoAccounts);
+            setTransactions(demoTransactions);
+            setGoals(demoGoals);
+          }
+        } else {
+          setAccounts(demoAccounts);
+          setTransactions(demoTransactions);
+          setGoals(demoGoals);
+        }
+        setAuthResolved(true);
         return;
       }
 
@@ -205,6 +234,7 @@ export default function BudgetApp() {
             name: `Foyer de ${currentUser.displayName || currentUser.email?.split("@")[0] || "Smart Budget"}`,
             memberIds: [currentUser.uid],
             memberEmails: [currentUser.email],
+            monthlyBudget: 2000,
             createdAt: Timestamp.now(),
           });
           batch.set(userRef, {
@@ -232,17 +262,19 @@ export default function BudgetApp() {
         console.error("Initialisation du foyer impossible", error);
         setHouseholdId(null);
         setToast("Votre espace budget n’a pas pu être préparé. Rechargez la page pour réessayer.");
+      } finally {
+        setAuthResolved(true);
       }
     });
   }, []);
 
   useEffect(() => {
-    if (!db || !householdId) {
-      setToast("Votre espace budget n’est pas encore prêt. Rechargez la page puis réessayez.");
-      return;
-    }
+    if (!db || !householdId) return;
     const base = `households/${householdId}`;
     const cleanups = [
+      onSnapshot(doc(db, "households", householdId), (snapshot) => {
+        setMonthlyBudget(Number(snapshot.data()?.monthlyBudget || 2000));
+      }),
       onSnapshot(collection(db, base, "accounts"), (snapshot) => {
         setAccounts(snapshot.docs.map((item) => ({ id: item.id, ...item.data() } as Account)));
       }),
@@ -257,6 +289,11 @@ export default function BudgetApp() {
   }, [householdId]);
 
   useEffect(() => {
+    if (!authResolved || user) return;
+    window.localStorage.setItem("smart-budget-demo", JSON.stringify({ accounts, transactions, goals, monthlyBudget }));
+  }, [accounts, authResolved, goals, monthlyBudget, transactions, user]);
+
+  useEffect(() => {
     if (!toast) return;
     const timer = window.setTimeout(() => setToast(""), 3200);
     return () => window.clearTimeout(timer);
@@ -267,31 +304,60 @@ export default function BudgetApp() {
     [accounts, user],
   );
   const visibleIds = useMemo(() => new Set(visibleAccounts.map((account) => account.id)), [visibleAccounts]);
+  const allVisibleTransactions = useMemo(
+    () => transactions.filter((transaction) => visibleIds.has(transaction.accountId)),
+    [transactions, visibleIds],
+  );
   const visibleTransactions = useMemo(
-    () => transactions.filter((transaction) => visibleIds.has(transaction.accountId) && transaction.date.startsWith(selectedPeriod)),
-    [transactions, visibleIds, selectedPeriod],
+    () => allVisibleTransactions.filter((transaction) => transaction.date.startsWith(selectedPeriod)),
+    [allVisibleTransactions, selectedPeriod],
   );
   const income = visibleTransactions.filter((item) => item.type === "income").reduce((sum, item) => sum + item.amount, 0);
   const expenses = visibleTransactions.filter((item) => item.type === "expense").reduce((sum, item) => sum + item.amount, 0);
   const balance = visibleAccounts.reduce((sum, account) => sum + Number(account.balance || 0), 0);
-  const budgetUsage = income ? Math.min(100, Math.round((expenses / income) * 100)) : 0;
-  const remainingBudget = Math.max(0, income - expenses);
-
-  const requireUser = (next: Exclude<ModalName, "auth" | null>) => {
-    if (!user) {
-      setAuthMode("signin");
-      setModal("auth");
-      setToast("Connectez-vous pour enregistrer vos données.");
-      return;
-    }
-    setModal(next);
-  };
+  const budgetUsage = monthlyBudget ? Math.min(100, Math.round((expenses / monthlyBudget) * 100)) : 0;
+  const remainingBudget = Math.max(0, monthlyBudget - expenses);
+  const categoryData = useMemo(() => {
+    const totals = new Map<string, number>();
+    visibleTransactions.filter((item) => item.type === "expense").forEach((item) => {
+      totals.set(item.category, (totals.get(item.category) || 0) + item.amount);
+    });
+    return [...totals.entries()]
+      .map(([label, value], index) => ({ label, value, color: chartColors[index % chartColors.length] }))
+      .sort((a, b) => b.value - a.value);
+  }, [visibleTransactions]);
+  const donutBackground = useMemo(() => {
+    if (!expenses || !categoryData.length) return "conic-gradient(#dfe5dc 0 100%)";
+    let cursor = 0;
+    const stops = categoryData.map((item) => {
+      const start = cursor;
+      cursor += (item.value / expenses) * 100;
+      return `${item.color} ${start}% ${cursor}%`;
+    });
+    return `conic-gradient(${stops.join(",")})`;
+  }, [categoryData, expenses]);
+  const monthlyData = useMemo(() => {
+    const formatter = new Intl.DateTimeFormat("fr-FR", { month: "short" });
+    return Array.from({ length: 6 }, (_, reverseIndex) => {
+      const date = new Date();
+      date.setDate(1);
+      date.setMonth(date.getMonth() - (5 - reverseIndex));
+      const key = date.toISOString().slice(0, 7);
+      const total = allVisibleTransactions
+        .filter((item) => item.type === "expense" && item.date.startsWith(key))
+        .reduce((sum, item) => sum + item.amount, 0);
+      return { key, label: formatter.format(date).replace(".", ""), total };
+    });
+  }, [allVisibleTransactions]);
+  const monthlyMax = Math.max(monthlyBudget, ...monthlyData.map((item) => item.total), 1);
 
   const openQuickExpense = (category = "Alimentation", label = "") => {
+    setEditingTransactionId(null);
     setTransactionType("expense");
     setSelectedCategory(category);
     setSelectedReason(operationReasons.expense.find((reason) => reason.label === label)?.label || operationReasons.expense[0].label);
-    requireUser("transaction");
+    setCustomReason("");
+    setModal("transaction");
   };
 
   const chooseOperationType = (type: TransactionType) => {
@@ -299,12 +365,35 @@ export default function BudgetApp() {
     setTransactionType(type);
     setSelectedReason(firstReason.label);
     setSelectedCategory(firstReason.category);
+    setCustomReason("");
   };
 
   const chooseReason = (label: string) => {
     const reason = operationReasons[transactionType].find((item) => item.label === label);
     setSelectedReason(label);
     if (reason) setSelectedCategory(reason.category);
+  };
+
+  const openTransactionEditor = (transaction: Transaction) => {
+    const reasons = operationReasons[transaction.type];
+    const matchingReason = reasons.find((reason) => reason.label === transaction.label);
+    const fallback = transaction.type === "expense" ? "Autre dépense" : "Autre revenu";
+    setEditingTransactionId(transaction.id);
+    setTransactionType(transaction.type);
+    setSelectedCategory(transaction.category);
+    setSelectedReason(matchingReason?.label || fallback);
+    setCustomReason(matchingReason ? "" : transaction.label);
+    setModal("transaction");
+  };
+
+  const openAccountEditor = (account?: Account) => {
+    setEditingAccountId(account?.id || null);
+    setModal("account");
+  };
+
+  const openGoalEditor = (goal?: Goal) => {
+    setEditingGoalId(goal?.id || null);
+    setModal("goal");
   };
 
   const showMobileOperation = () => {
@@ -322,13 +411,8 @@ export default function BudgetApp() {
       if (!isTyping && !modal && event.key.toLowerCase() === "e") {
         event.preventDefault();
         chooseOperationType("expense");
-        if (user) {
-          setModal("transaction");
-        } else {
-          setAuthMode("signin");
-          setModal("auth");
-          setToast("Connectez-vous pour enregistrer vos dépenses.");
-        }
+        setEditingTransactionId(null);
+        setModal("transaction");
       }
     };
     window.addEventListener("keydown", handleShortcut);
@@ -368,96 +452,306 @@ export default function BudgetApp() {
 
   const addTransaction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!user) {
-      setAuthMode("signin");
-      setModal("auth");
-      setToast("Connectez-vous pour enregistrer cette opération.");
-      return;
-    }
-    if (!db || !householdId) return;
     const data = new FormData(event.currentTarget);
     const amount = Number(String(data.get("amount")).replace(",", "."));
+    if (!amount || amount <= 0) {
+      setToast("Saisissez un montant supérieur à zéro.");
+      return;
+    }
     const reasonLabel = String(data.get("reason") || selectedReason);
     const reason = operationReasons[transactionType].find((item) => item.label === reasonLabel);
-    const transaction = {
-      label: reason?.label || reasonLabel,
+    const customLabel = String(data.get("customReason") || "").trim();
+    const label = reasonLabel.startsWith("Autre") && customLabel ? customLabel : reason?.label || reasonLabel;
+    const accountId = String(data.get("accountId"));
+    const transaction: Transaction = {
+      id: editingTransactionId || `local-${Date.now()}`,
+      label,
       amount,
       type: transactionType,
       category: reason?.category || selectedCategory,
-      accountId: String(data.get("accountId")),
+      accountId,
       date: String(data.get("date")),
-      createdBy: user.uid,
-      createdAt: Timestamp.now(),
+      createdBy: user?.uid || "demo",
     };
-    try {
-      await addDoc(collection(db, "households", householdId, "transactions"), transaction);
-      const account = accounts.find((item) => item.id === transaction.accountId);
-      if (account) {
-        await setDoc(
-          doc(db, "households", householdId, "accounts", account.id),
-          { balance: Number(account.balance || 0) + (transaction.type === "income" ? amount : -amount) },
-          { merge: true },
-        );
-      }
+    const previous = editingTransactionId ? transactions.find((item) => item.id === editingTransactionId) : undefined;
+    const impact = (item: Pick<Transaction, "type" | "amount">) => item.type === "income" ? item.amount : -item.amount;
+    const newImpact = impact(transaction);
+
+    if (!user) {
+      setTransactions((current) => previous
+        ? current.map((item) => item.id === previous.id ? transaction : item)
+        : [transaction, ...current]);
+      setAccounts((current) => current.map((account) => {
+        let delta = 0;
+        if (previous?.accountId === account.id) delta -= impact(previous);
+        if (transaction.accountId === account.id) delta += newImpact;
+        return delta ? { ...account, balance: account.balance + delta } : account;
+      }));
       setModal(null);
+      setEditingTransactionId(null);
       setSelectedReason(operationReasons[transactionType][0].label);
-      setToast("Mouvement ajouté au budget.");
+      setCustomReason("");
+      setToast(previous ? "Opération modifiée en mode découverte." : "Opération ajoutée en mode découverte.");
+      return;
+    }
+    if (!db || !householdId) {
+      setToast("Votre espace budget n’est pas encore prêt. Rechargez la page puis réessayez.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      const reference = editingTransactionId
+        ? doc(db, "households", householdId, "transactions", editingTransactionId)
+        : doc(collection(db, "households", householdId, "transactions"));
+      const payload = {
+        label: transaction.label,
+        amount: transaction.amount,
+        type: transaction.type,
+        category: transaction.category,
+        accountId: transaction.accountId,
+        date: transaction.date,
+        createdBy: previous?.createdBy || user.uid,
+        ...(previous ? {} : { createdAt: Timestamp.now() }),
+      };
+      batch.set(reference, payload, { merge: Boolean(previous) });
+
+      if (previous?.accountId === transaction.accountId) {
+        batch.update(doc(db, "households", householdId, "accounts", transaction.accountId), { balance: increment(newImpact - impact(previous)) });
+      } else {
+        if (previous) {
+          batch.update(doc(db, "households", householdId, "accounts", previous.accountId), { balance: increment(-impact(previous)) });
+        }
+        batch.update(doc(db, "households", householdId, "accounts", transaction.accountId), { balance: increment(newImpact) });
+      }
+      await batch.commit();
+      setModal(null);
+      setEditingTransactionId(null);
+      setSelectedReason(operationReasons[transactionType][0].label);
+      setCustomReason("");
+      setToast(previous ? "Opération modifiée." : "Mouvement ajouté au budget.");
     } catch (error) {
       console.error("Enregistrement de l’opération impossible", error);
-      setToast("La dépense n’a pas pu être enregistrée. Vérifiez votre connexion puis réessayez.");
+      setToast("L’opération n’a pas pu être enregistrée. Vérifiez votre connexion puis réessayez.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const deleteTransaction = async (transaction: Transaction) => {
+    if (!window.confirm(`Supprimer « ${transaction.label} » ? Le solde du compte sera recalculé.`)) return;
+    const reversal = transaction.type === "income" ? -transaction.amount : transaction.amount;
+    if (!user) {
+      setTransactions((current) => current.filter((item) => item.id !== transaction.id));
+      setAccounts((current) => current.map((account) => account.id === transaction.accountId ? { ...account, balance: account.balance + reversal } : account));
+      setToast("Opération supprimée.");
+      return;
+    }
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      batch.delete(doc(db, "households", householdId, "transactions", transaction.id));
+      batch.update(doc(db, "households", householdId, "accounts", transaction.accountId), { balance: increment(reversal) });
+      await batch.commit();
+      setToast("Opération supprimée et solde recalculé.");
+    } catch (error) {
+      console.error("Suppression impossible", error);
+      setToast("Impossible de supprimer cette opération.");
+    } finally {
+      setIsSaving(false);
     }
   };
 
   const addAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!db || !householdId || !user) return;
     const data = new FormData(event.currentTarget);
-    await addDoc(collection(db, "households", householdId, "accounts"), {
+    const existing = editingAccountId ? accounts.find((item) => item.id === editingAccountId) : undefined;
+    const account: Account = {
+      id: editingAccountId || `local-account-${Date.now()}`,
       name: String(data.get("name")),
       type: String(data.get("type")),
       balance: Number(String(data.get("balance")).replace(",", ".")) || 0,
-      visibility: String(data.get("visibility")),
-      ownerId: user.uid,
-      createdAt: Timestamp.now(),
-    });
-    setModal(null);
-    setToast("Nouveau compte ajouté.");
+      visibility: String(data.get("visibility")) as Account["visibility"],
+      ownerId: existing?.ownerId || user?.uid || "demo",
+    };
+    if (!user) {
+      setAccounts((current) => existing ? current.map((item) => item.id === existing.id ? account : item) : [...current, account]);
+      setModal(null);
+      setEditingAccountId(null);
+      setToast(existing ? "Compte modifié." : "Compte ajouté en mode découverte.");
+      return;
+    }
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      const reference = existing
+        ? doc(db, "households", householdId, "accounts", existing.id)
+        : doc(collection(db, "households", householdId, "accounts"));
+      await setDoc(reference, {
+        name: account.name,
+        type: account.type,
+        balance: account.balance,
+        visibility: account.visibility,
+        ownerId: account.ownerId,
+        ...(existing ? {} : { createdAt: Timestamp.now() }),
+      }, { merge: Boolean(existing) });
+      setModal(null);
+      setEditingAccountId(null);
+      setToast(existing ? "Compte modifié." : "Nouveau compte ajouté.");
+    } catch (error) {
+      console.error("Enregistrement du compte impossible", error);
+      setToast("Le compte n’a pas pu être enregistré.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const addGoal = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!db || !householdId) return;
     const data = new FormData(event.currentTarget);
     const target = Number(String(data.get("target")).replace(",", "."));
     const saved = Number(String(data.get("saved")).replace(",", ".")) || 0;
     const dueDate = String(data.get("dueDate"));
     const months = Math.max(1, Math.ceil((new Date(dueDate).getTime() - Date.now()) / (30.44 * 86400000)));
-    await addDoc(collection(db, "households", householdId, "goals"), {
+    const existing = editingGoalId ? goals.find((item) => item.id === editingGoalId) : undefined;
+    const goal: Goal = {
+      id: editingGoalId || `local-goal-${Date.now()}`,
       name: String(data.get("name")),
       target,
       saved,
       dueDate,
       monthly: Math.max(0, (target - saved) / months),
-      createdAt: Timestamp.now(),
-    });
+    };
+    if (!user) {
+      setGoals((current) => existing ? current.map((item) => item.id === existing.id ? goal : item) : [...current, goal]);
+      setModal(null);
+      setEditingGoalId(null);
+      setToast(existing ? "Projet modifié." : "Projet ajouté en mode découverte.");
+      return;
+    }
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      const reference = existing
+        ? doc(db, "households", householdId, "goals", existing.id)
+        : doc(collection(db, "households", householdId, "goals"));
+      await setDoc(reference, {
+        name: goal.name,
+        target: goal.target,
+        saved: goal.saved,
+        dueDate: goal.dueDate,
+        monthly: goal.monthly,
+        ...(existing ? {} : { createdAt: Timestamp.now() }),
+      }, { merge: Boolean(existing) });
+      setModal(null);
+      setEditingGoalId(null);
+      setToast(existing ? "Projet modifié." : "Projet ajouté avec sa mensualité conseillée.");
+    } catch (error) {
+      console.error("Enregistrement du projet impossible", error);
+      setToast("Le projet n’a pas pu être enregistré.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const deleteGoal = async (goal: Goal) => {
+    if (!window.confirm(`Supprimer le projet « ${goal.name} » ?`)) return;
+    if (!user) {
+      setGoals((current) => current.filter((item) => item.id !== goal.id));
+      setToast("Projet supprimé.");
+      return;
+    }
+    if (!db || !householdId) return;
+    try {
+      await deleteDoc(doc(db, "households", householdId, "goals", goal.id));
+      setToast("Projet supprimé.");
+    } catch (error) {
+      console.error("Suppression du projet impossible", error);
+      setToast("Impossible de supprimer ce projet.");
+    }
+  };
+
+  const saveMonthlyBudget = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    const value = Number(String(data.get("monthlyBudget")).replace(",", "."));
+    if (!value || value <= 0) {
+      setToast("Indiquez un budget mensuel supérieur à zéro.");
+      return;
+    }
+    setMonthlyBudget(value);
+    if (user && db && householdId) {
+      await setDoc(doc(db, "households", householdId), { monthlyBudget: value }, { merge: true });
+    }
     setModal(null);
-    setToast("Projet ajouté avec sa mensualité conseillée.");
+    setToast("Budget mensuel mis à jour.");
+  };
+
+  const resetData = async () => {
+    if (!user) {
+      setTransactions([]);
+      setGoals([]);
+      setAccounts(demoAccounts.map((account) => ({ ...account, balance: 0 })));
+      setMonthlyBudget(2000);
+      setModal(null);
+      setToast("Données d’exemple remises à zéro.");
+      return;
+    }
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      allVisibleTransactions.filter((item) => !item.createdBy || item.createdBy === user.uid).forEach((item) => {
+        batch.delete(doc(db, "households", householdId, "transactions", item.id));
+      });
+      goals.forEach((goal) => batch.delete(doc(db, "households", householdId, "goals", goal.id)));
+      visibleAccounts.filter((account) => account.ownerId === user.uid).forEach((account) => {
+        batch.update(doc(db, "households", householdId, "accounts", account.id), { balance: 0 });
+      });
+      batch.set(doc(db, "households", householdId), { monthlyBudget: 2000 }, { merge: true });
+      await batch.commit();
+      setModal(null);
+      setToast("Vos opérations, projets et soldes ont été remis à zéro.");
+    } catch (error) {
+      console.error("Remise à zéro impossible", error);
+      setToast("La remise à zéro n’a pas pu être effectuée.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const importCsv = async () => {
-    if (!db || !householdId || !user || !csvPreview.length) return;
+    if (!csvPreview.length) return;
     const accountId = visibleAccounts[0]?.id;
     if (!accountId) return;
+    const totalImpact = csvPreview.reduce((sum, row) => sum + (row.type === "income" ? row.amount : -row.amount), 0);
+    if (!user) {
+      const rows = csvPreview.map((row) => ({ ...row, accountId, createdBy: "demo" }));
+      setTransactions((current) => [...rows, ...current]);
+      setAccounts((current) => current.map((account) => account.id === accountId ? { ...account, balance: account.balance + totalImpact } : account));
+      setCsvPreview([]);
+      setModal(null);
+      setToast(`${rows.length} opérations importées en mode découverte.`);
+      return;
+    }
+    if (!db || !householdId) return;
     const batch = writeBatch(db);
     csvPreview.forEach((row) => {
       const reference = doc(collection(db, "households", householdId, "transactions"));
       batch.set(reference, { ...row, accountId, createdBy: user.uid, imported: true, createdAt: Timestamp.now() });
     });
+    batch.update(doc(db, "households", householdId, "accounts", accountId), { balance: increment(totalImpact) });
     await batch.commit();
     setCsvPreview([]);
     setModal(null);
     setToast(`${csvPreview.length} opérations importées.`);
   };
+
+  const editingTransaction = editingTransactionId ? transactions.find((item) => item.id === editingTransactionId) : undefined;
+  const editingAccount = editingAccountId ? accounts.find((item) => item.id === editingAccountId) : undefined;
+  const editingGoal = editingGoalId ? goals.find((item) => item.id === editingGoalId) : undefined;
 
   return (
     <div className="app-shell">
@@ -488,9 +782,9 @@ export default function BudgetApp() {
           </div>
           <div className="top-actions">
             <select className="period-select" aria-label="Période" value={selectedPeriod} onChange={(event) => setSelectedPeriod(event.target.value)}>
-              <option value="2026-07">Juillet 2026</option>
-              <option value="2026-06">Juin 2026</option>
-              <option value="2026-05">Mai 2026</option>
+              {[...monthlyData].reverse().map((month) => (
+                <option key={month.key} value={month.key}>{month.label} {month.key.slice(0, 4)}</option>
+              ))}
             </select>
             {user ? (
               <button className="btn btn-soft" onClick={() => auth && signOut(auth)}>Déconnexion</button>
@@ -530,12 +824,13 @@ export default function BudgetApp() {
                 {operationReasons[transactionType].map((reason) => <option key={reason.label}>{reason.label}</option>)}
               </select>
             </label>
+            {selectedReason.startsWith("Autre") && <label className="label">Précision<input className="field" name="customReason" value={customReason} onChange={(event) => setCustomReason(event.target.value)} placeholder="Ex. Cadeau, remboursement…" required /></label>}
             <div className="category-auto"><span>{categoryIcons[selectedCategory] || "•"}</span> Catégorie automatique : <strong>{selectedCategory}</strong></div>
             <div className="form-grid expense-details">
               <label className="label">Compte<select className="field" name="accountId">{visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
               <label className="label">Date<input className="field" type="date" name="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
             </div>
-            <button className="btn btn-primary mobile-save-operation">{transactionType === "expense" ? "Enregistrer la dépense" : "Enregistrer le revenu"}</button>
+            <button className="btn btn-primary mobile-save-operation" disabled={isSaving}>{isSaving ? "Enregistrement…" : transactionType === "expense" ? "Enregistrer la dépense" : "Enregistrer le revenu"}</button>
           </form>
         </section>
 
@@ -554,14 +849,14 @@ export default function BudgetApp() {
                 <span>{icon}</span>{label}
               </button>
             ))}
-            <button className="quick-main" onClick={() => openQuickExpense()}>＋ Autre dépense</button>
+            <button className="quick-main" onClick={() => openQuickExpense("Autre", "Autre dépense")}>＋ Autre dépense</button>
           </div>
         </section>
 
         <section className="budget-usage card" aria-label={`${budgetUsage} pour cent du budget utilisé`}>
           <div className="budget-usage-head">
-            <div><strong>Budget utilisé</strong><span>{money.format(expenses)} sur {money.format(income)}</span></div>
-            <b>{budgetUsage} %</b>
+            <div><strong>Budget utilisé</strong><span>{money.format(expenses)} sur {money.format(monthlyBudget)}</span></div>
+            <div className="budget-score"><b>{budgetUsage} %</b><button className="text-button" onClick={() => setModal("budget")}>Modifier</button></div>
           </div>
           <div className="budget-usage-track"><span style={{ width: `${budgetUsage}%` }} /></div>
           <div className="budget-usage-foot"><span>Reste disponible ce mois</span><strong>{money.format(remainingBudget)}</strong></div>
@@ -570,45 +865,53 @@ export default function BudgetApp() {
         <section className="summary-grid" aria-label="Résumé du budget">
           <SummaryCard label="Solde disponible" value={balance} note="Tous les comptes visibles" accent="var(--green)" />
           <SummaryCard label="Revenus ce mois" value={income} note="↓ Entrées enregistrées" accent="var(--mint)" />
-          <SummaryCard label="Dépenses ce mois" value={expenses} note={`${income ? Math.round((expenses / income) * 100) : 0} % de vos revenus`} accent="var(--coral)" />
+          <SummaryCard label="Dépenses ce mois" value={expenses} note={`${budgetUsage} % du budget mensuel`} accent="var(--coral)" />
         </section>
 
         <section className="dashboard-grid">
           <article className="card panel">
-            <div className="panel-head"><h2 className="panel-title">Où part votre argent ?</h2><button className="text-button">Voir le détail →</button></div>
+            <div className="panel-head"><h2 className="panel-title">Où part votre argent ?</h2><button className="text-button" onClick={() => setActiveNav("Transactions")}>Voir le détail →</button></div>
             <div className="chart-wrap">
-              <div className="donut" aria-label="Répartition des dépenses par catégorie" />
+              <div className="donut" style={{ background: donutBackground }} aria-label="Répartition des dépenses par catégorie"><span>{budgetUsage} %<small>du budget</small></span></div>
               <div className="legend">
-                {[
-                  ["var(--green)", "Logement", 980],
-                  ["var(--coral)", "Alimentation", 412],
-                  ["var(--yellow)", "Transport", 286],
-                  ["var(--mint)", "Loisirs & autres", 203],
-                ].map(([color, label, value]) => (
-                  <div className="legend-row" key={String(label)}><span className="legend-color" style={{ background: String(color) }} /><span>{label}</span><strong>{money.format(Number(value))}</strong></div>
-                ))}
+                {categoryData.length ? categoryData.slice(0, 6).map((item) => (
+                  <div className="legend-row" key={item.label}><span className="legend-color" style={{ background: item.color }} /><span>{item.label}</span><strong>{money.format(item.value)}</strong></div>
+                )) : <div className="empty-chart">Ajoutez une dépense pour voir sa répartition.</div>}
               </div>
             </div>
           </article>
 
           <article className="card panel">
-            <div className="panel-head"><h2 className="panel-title">Mes comptes</h2><button className="text-button" onClick={() => requireUser("account")}>＋ Ajouter</button></div>
+            <div className="panel-head"><h2 className="panel-title">Mes comptes</h2><button className="text-button" onClick={() => openAccountEditor()}>＋ Ajouter</button></div>
             <div className="account-list">
               {visibleAccounts.slice(0, 4).map((account) => (
                 <div className="account-row" key={account.id}>
                   <span className="account-icon">{account.type === "Épargne" ? "◇" : "▰"}</span>
                   <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type}</div>{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
-                  <div className="account-amount">{money.format(Number(account.balance || 0))}</div>
+                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><button className="mini-action" onClick={() => openAccountEditor(account)}>Modifier</button></div>
                 </div>
               ))}
             </div>
           </article>
         </section>
 
+        <section className="card panel monthly-chart-card">
+          <div className="panel-head"><div><h2 className="panel-title">Évolution des dépenses</h2><p className="muted">Comparaison des six derniers mois.</p></div><span className="budget-target">Budget : {money.format(monthlyBudget)}</span></div>
+          <div className="monthly-chart" role="img" aria-label="Graphique des dépenses des six derniers mois">
+            {monthlyData.map((month) => (
+              <div className="month-column" key={month.key}>
+                <strong>{month.total ? money.format(month.total) : "0 €"}</strong>
+                <div className="month-track"><span style={{ height: `${Math.max(month.total ? 8 : 2, (month.total / monthlyMax) * 100)}%` }} /></div>
+                <small>{month.label}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <section className="card transactions">
           <div className="panel-head">
             <h2 className="panel-title">Derniers mouvements</h2>
-            <div><button className="text-button" onClick={() => requireUser("csv")}>Importer un CSV</button><button className="text-button">Tout voir →</button></div>
+            <div><button className="text-button" onClick={() => setModal("csv")}>Importer un CSV</button><button className="text-button" onClick={() => setActiveNav("Transactions")}>Tout voir →</button></div>
           </div>
           <div className="transaction-list">
             {visibleTransactions.length ? visibleTransactions.slice(0, 7).map((transaction) => (
@@ -617,7 +920,7 @@ export default function BudgetApp() {
                 <div><div className="transaction-label">{transaction.label}</div><div className="muted">{visibleAccounts.find((account) => account.id === transaction.accountId)?.name || "Compte"}</div></div>
                 <div className="transaction-category">{transaction.category}</div>
                 <div className="transaction-date">{displayDate.format(new Date(transaction.date))}</div>
-                <div className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : "−"} {money.format(transaction.amount)}</div>
+                <div className="transaction-end"><div className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : "−"} {money.format(transaction.amount)}</div><div className="row-actions"><button onClick={() => openTransactionEditor(transaction)}>Modifier</button><button className="danger-link" onClick={() => deleteTransaction(transaction)}>Supprimer</button></div></div>
               </div>
             )) : <div className="empty-state">Aucun mouvement pour le moment.</div>}
           </div>
@@ -630,14 +933,14 @@ export default function BudgetApp() {
             <div className="goal-list" style={{ marginTop: 14 }}>
               {goals.slice(0, 2).map((goal) => (
                 <div className="goal-row" key={goal.id}>
-                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}><strong>{goal.name}</strong><span>{money.format(goal.saved)} / {money.format(goal.target)}</span></div>
+                  <div className="goal-title-row"><strong>{goal.name}</strong><span>{money.format(goal.saved)} / {money.format(goal.target)}</span></div>
                   <div className="progress"><span style={{ width: `${Math.min(100, (goal.saved / goal.target) * 100)}%` }} /></div>
-                  <div className="muted">{money.format(goal.monthly)} / mois conseillé</div>
+                  <div className="goal-footer"><div className="muted">{money.format(goal.monthly)} / mois conseillé</div><div className="row-actions"><button onClick={() => openGoalEditor(goal)}>Modifier</button><button className="danger-link" onClick={() => deleteGoal(goal)}>Supprimer</button></div></div>
                 </div>
               ))}
             </div>
           </div>
-          <button className="btn btn-lime" onClick={() => requireUser("goal")}>＋ Nouveau projet</button>
+          <button className="btn btn-lime" onClick={() => openGoalEditor()}>＋ Nouveau projet</button>
         </section>
           </>
         )}
@@ -646,7 +949,7 @@ export default function BudgetApp() {
           <section className="card transactions view-section">
             <div className="panel-head">
               <div><h2 className="panel-title">Toutes les opérations</h2><p className="muted">Dépenses et revenus de la période sélectionnée.</p></div>
-              <div className="view-actions"><button className="btn btn-soft" onClick={() => requireUser("csv")}>Importer un CSV</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
+              <div className="view-actions"><button className="btn btn-soft" onClick={() => setModal("csv")}>Importer un CSV</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
             </div>
             <div className="transaction-list">
               {visibleTransactions.length ? visibleTransactions.map((transaction) => (
@@ -655,7 +958,7 @@ export default function BudgetApp() {
                   <div><div className="transaction-label">{transaction.label}</div><div className="muted">{visibleAccounts.find((account) => account.id === transaction.accountId)?.name || "Compte"}</div></div>
                   <div className="transaction-category">{transaction.category}</div>
                   <div className="transaction-date">{displayDate.format(new Date(transaction.date))}</div>
-                  <div className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : "−"} {money.format(transaction.amount)}</div>
+                  <div className="transaction-end"><div className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : "−"} {money.format(transaction.amount)}</div><div className="row-actions"><button onClick={() => openTransactionEditor(transaction)}>Modifier</button><button className="danger-link" onClick={() => deleteTransaction(transaction)}>Supprimer</button></div></div>
                 </div>
               )) : <div className="empty-state">Aucune opération pour cette période.</div>}
             </div>
@@ -666,14 +969,14 @@ export default function BudgetApp() {
           <section className="card panel view-section">
             <div className="panel-head">
               <div><h2 className="panel-title">Comptes visibles</h2><p className="muted">Les comptes personnels restent privés selon vos réglages.</p></div>
-              <button className="btn btn-primary" onClick={() => requireUser("account")}>＋ Ajouter un compte</button>
+              <button className="btn btn-primary" onClick={() => openAccountEditor()}>＋ Ajouter un compte</button>
             </div>
             <div className="account-list accounts-view">
               {visibleAccounts.map((account) => (
                 <div className="account-row" key={account.id}>
                   <span className="account-icon">{account.type === "Épargne" ? "◇" : "▰"}</span>
                   <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type}</div>{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
-                  <div className="account-amount">{money.format(Number(account.balance || 0))}</div>
+                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><button className="mini-action" onClick={() => openAccountEditor(account)}>Modifier</button></div>
                 </div>
               ))}
             </div>
@@ -690,12 +993,12 @@ export default function BudgetApp() {
                   <div className="goal-row" key={goal.id}>
                     <div className="goal-title-row"><strong>{goal.name}</strong><span>{money.format(goal.saved)} / {money.format(goal.target)}</span></div>
                     <div className="progress"><span style={{ width: `${Math.min(100, (goal.saved / goal.target) * 100)}%` }} /></div>
-                    <div className="muted">{money.format(goal.monthly)} / mois conseillé · objectif {displayDate.format(new Date(goal.dueDate))}</div>
+                    <div className="goal-footer"><div className="muted">{money.format(goal.monthly)} / mois conseillé · objectif {displayDate.format(new Date(goal.dueDate))}</div><div className="row-actions"><button onClick={() => openGoalEditor(goal)}>Modifier</button><button className="danger-link" onClick={() => deleteGoal(goal)}>Supprimer</button></div></div>
                   </div>
                 )) : <div className="empty-state">Aucun projet planifié.</div>}
               </div>
             </div>
-            <button className="btn btn-lime" onClick={() => requireUser("goal")}>＋ Nouveau projet</button>
+            <button className="btn btn-lime" onClick={() => openGoalEditor()}>＋ Nouveau projet</button>
           </section>
         )}
 
@@ -708,6 +1011,8 @@ export default function BudgetApp() {
             <div className="household-settings">
               <div><strong>Partage familial</strong><p className="muted">Chaque membre utilise son propre accès Firebase.</p></div>
               <div><strong>Confidentialité des comptes</strong><p className="muted">Un compte personnel peut rester visible uniquement par son propriétaire.</p></div>
+              <div><strong>Budget mensuel</strong><p className="muted">{money.format(monthlyBudget)} · utilisé pour calculer vos pourcentages.</p><button className="mini-action" onClick={() => setModal("budget")}>Modifier le budget</button></div>
+              <div className="danger-zone"><strong>Remise à zéro</strong><p className="muted">Efface les opérations et projets, puis remet les soldes à zéro.</p><button className="btn btn-danger" onClick={() => setModal("reset")}>Remettre mes données à zéro</button></div>
             </div>
             {user ? <button className="btn btn-soft" onClick={() => auth && signOut(auth)}>Se déconnecter</button> : <button className="btn btn-primary" onClick={() => setModal("auth")}>Se connecter ou créer un compte</button>}
           </section>
@@ -754,7 +1059,7 @@ export default function BudgetApp() {
       )}
 
       {modal === "transaction" && (
-        <Modal title={transactionType === "expense" ? "Dépense rapide" : "Ajouter un revenu"} onClose={() => setModal(null)}>
+        <Modal title={editingTransaction ? "Modifier l’opération" : transactionType === "expense" ? "Dépense rapide" : "Ajouter un revenu"} onClose={() => { setEditingTransactionId(null); setModal(null); }}>
           <form onSubmit={addTransaction}>
             <div className="expense-form">
               <div className="segmented expense-type">
@@ -763,7 +1068,7 @@ export default function BudgetApp() {
               </div>
               <label className="label amount-label">
                 Montant
-                <span className="amount-wrap"><input className="field amount-input" name="amount" inputMode="decimal" placeholder="0,00" autoFocus required /><b>€</b></span>
+                <span className="amount-wrap"><input className="field amount-input" name="amount" inputMode="decimal" placeholder="0,00" defaultValue={editingTransaction?.amount} autoFocus required /><b>€</b></span>
               </label>
               <label className="label">
                 Motif {transactionType === "expense" ? "de la dépense" : "du revenu"}
@@ -771,42 +1076,60 @@ export default function BudgetApp() {
                   {operationReasons[transactionType].map((reason) => <option key={reason.label}>{reason.label}</option>)}
                 </select>
               </label>
+              {selectedReason.startsWith("Autre") && <label className="label">Précision<input className="field" name="customReason" value={customReason} onChange={(event) => setCustomReason(event.target.value)} placeholder="Ex. Cadeau, remboursement…" required /></label>}
               <div className="category-auto"><span>{categoryIcons[selectedCategory] || "•"}</span> Catégorie automatique : <strong>{selectedCategory}</strong></div>
               <div className="form-grid expense-details">
-                <label className="label">Compte<select className="field" name="accountId">{visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
-                <label className="label">Date<input className="field" type="date" name="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
+                <label className="label">Compte<select className="field" name="accountId" defaultValue={editingTransaction?.accountId}>{visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+                <label className="label">Date<input className="field" type="date" name="date" defaultValue={editingTransaction?.date || new Date().toISOString().slice(0, 10)} required /></label>
               </div>
             </div>
-            <div className="form-actions expense-submit"><button type="button" className="btn btn-soft" onClick={() => setModal(null)}>Annuler</button><button className="btn btn-primary">{transactionType === "expense" ? "Enregistrer la dépense" : "Enregistrer le revenu"}</button></div>
+            <div className="form-actions expense-submit"><button type="button" className="btn btn-soft" onClick={() => { setEditingTransactionId(null); setModal(null); }}>Annuler</button><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingTransaction ? "Enregistrer les modifications" : transactionType === "expense" ? "Enregistrer la dépense" : "Enregistrer le revenu"}</button></div>
           </form>
         </Modal>
       )}
 
       {modal === "account" && (
-        <Modal title="Ajouter un compte" onClose={() => setModal(null)}>
+        <Modal title={editingAccount ? "Modifier le compte" : "Ajouter un compte"} onClose={() => { setEditingAccountId(null); setModal(null); }}>
           <form onSubmit={addAccount}>
             <div className="form-grid">
-              <label className="label wide">Nom du compte<input className="field" name="name" placeholder="Ex. Compte joint" required /></label>
-              <label className="label">Type<select className="field" name="type"><option>Courant</option><option>Épargne</option><option>Carte</option><option>Espèces</option></select></label>
-              <label className="label">Solde actuel<input className="field" name="balance" inputMode="decimal" defaultValue="0" /></label>
-              <label className="label wide">Visibilité<select className="field" name="visibility"><option value="shared">Partagé avec le foyer</option><option value="private">Personnel — moi uniquement</option></select></label>
+              <label className="label wide">Nom du compte<input className="field" name="name" placeholder="Ex. Compte joint" defaultValue={editingAccount?.name} required /></label>
+              <label className="label">Type<select className="field" name="type" defaultValue={editingAccount?.type || "Courant"}><option>Courant</option><option>Épargne</option><option>Carte</option><option>Espèces</option></select></label>
+              <label className="label">Solde actuel<input className="field" name="balance" inputMode="decimal" defaultValue={editingAccount?.balance ?? 0} /></label>
+              <label className="label wide">Visibilité<select className="field" name="visibility" defaultValue={editingAccount?.visibility || "shared"}><option value="shared">Partagé avec le foyer</option><option value="private">Personnel — moi uniquement</option></select></label>
             </div>
-            <div className="form-actions"><button className="btn btn-primary">Créer le compte</button></div>
+            <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingAccount ? "Enregistrer le compte" : "Créer le compte"}</button></div>
           </form>
         </Modal>
       )}
 
       {modal === "goal" && (
-        <Modal title="Planifier un projet" onClose={() => setModal(null)}>
+        <Modal title={editingGoal ? "Modifier le projet" : "Planifier un projet"} onClose={() => { setEditingGoalId(null); setModal(null); }}>
           <form onSubmit={addGoal}>
             <div className="form-grid">
-              <label className="label wide">Nom du projet<input className="field" name="name" placeholder="Ex. Vacances d’été" required /></label>
-              <label className="label">Budget total<input className="field" name="target" inputMode="decimal" required /></label>
-              <label className="label">Déjà épargné<input className="field" name="saved" inputMode="decimal" defaultValue="0" /></label>
-              <label className="label wide">Date prévue<input className="field" type="date" name="dueDate" required /></label>
+              <label className="label wide">Nom du projet<input className="field" name="name" placeholder="Ex. Vacances d’été" defaultValue={editingGoal?.name} required /></label>
+              <label className="label">Budget total<input className="field" name="target" inputMode="decimal" defaultValue={editingGoal?.target} required /></label>
+              <label className="label">Déjà épargné<input className="field" name="saved" inputMode="decimal" defaultValue={editingGoal?.saved ?? 0} /></label>
+              <label className="label wide">Date prévue<input className="field" type="date" name="dueDate" defaultValue={editingGoal?.dueDate} required /></label>
             </div>
-            <div className="form-actions"><button className="btn btn-primary">Calculer ma mensualité</button></div>
+            <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingGoal ? "Enregistrer le projet" : "Créer et calculer la mensualité"}</button></div>
           </form>
+        </Modal>
+      )}
+
+      {modal === "budget" && (
+        <Modal title="Budget mensuel" onClose={() => setModal(null)}>
+          <form onSubmit={saveMonthlyBudget}>
+            <div className="auth-intro">Ce montant sert de référence pour calculer le pourcentage de budget utilisé et le reste disponible.</div>
+            <label className="label amount-label">Budget maximum du mois<span className="amount-wrap"><input className="field amount-input" name="monthlyBudget" inputMode="decimal" defaultValue={monthlyBudget} autoFocus required /><b>€</b></span></label>
+            <div className="form-actions"><button className="btn btn-primary">Enregistrer le budget</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {modal === "reset" && (
+        <Modal title="Remettre les données à zéro" onClose={() => setModal(null)}>
+          <div className="reset-warning"><strong>Cette action est irréversible.</strong><p>Les opérations et projets seront supprimés. Les soldes des comptes seront remis à 0 € et le budget mensuel à 2 000 €.</p></div>
+          <div className="form-actions"><button className="btn btn-soft" onClick={() => setModal(null)}>Annuler</button><button className="btn btn-danger" onClick={resetData} disabled={isSaving}>{isSaving ? "Remise à zéro…" : "Confirmer la remise à zéro"}</button></div>
         </Modal>
       )}
 

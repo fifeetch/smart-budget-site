@@ -105,6 +105,7 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .budget-usage-head > div { display: grid; gap: 3px; }
 .budget-usage-head span, .budget-usage-foot { color: var(--muted); font-size: 12px; }
 .budget-usage-head b { color: var(--green); font-size: 24px; letter-spacing: -.03em; }
+.budget-score { display: grid; justify-items: end; gap: 2px; }
 .budget-usage-track { height: 9px; overflow: hidden; border-radius: 99px; background: #dfe8df; }
 .budget-usage-track span { display: block; height: 100%; border-radius: inherit; background: var(--green-2); transition: width 250ms ease; }
 .budget-usage-foot strong { color: var(--green); }
@@ -126,14 +127,17 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .text-button { border: 0; background: transparent; color: var(--green-2); font-size: 13px; font-weight: 750; cursor: pointer; }
 .chart-wrap { display: grid; grid-template-columns: 150px 1fr; gap: 28px; align-items: center; }
 .donut {
-  width: 142px; height: 142px; border-radius: 50%; display: grid; place-items: center;
+  width: 142px; height: 142px; border-radius: 50%; display: grid; place-items: center; position: relative;
   background: conic-gradient(var(--green) 0 36%,var(--coral) 36% 59%,var(--yellow) 59% 78%,var(--mint) 78% 100%);
 }
-.donut::before { content: ""; width: 82px; height: 82px; border-radius: 50%; background: var(--paper); }
+.donut::before { content: ""; position: absolute; width: 82px; height: 82px; border-radius: 50%; background: var(--paper); }
+.donut > span { position: relative; z-index: 1; display: grid; text-align: center; color: var(--green); font-weight: 800; }
+.donut > span small { color: var(--muted); font-size: 9px; font-weight: 600; }
 .legend { display: grid; gap: 14px; }
 .legend-row { display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; align-items: center; font-size: 13px; }
 .legend-row strong { font-size: 13px; }
 .legend-color { width: 10px; height: 10px; border-radius: 3px; }
+.empty-chart { color: var(--muted); font-size: 12px; line-height: 1.5; }
 .account-list, .goal-list { display: grid; gap: 11px; }
 .account-row, .goal-row { border: 1px solid var(--line); border-radius: 14px; padding: 14px; }
 .account-row { display: grid; grid-template-columns: 39px 1fr auto; align-items: center; gap: 11px; }
@@ -141,7 +145,23 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .account-name { font-size: 13px; font-weight: 750; }
 .account-meta, .muted { color: var(--muted); font-size: 11px; }
 .account-amount { font-weight: 800; }
+.account-side { display: grid; justify-items: end; gap: 4px; }
+.mini-action {
+  border: 0; padding: 2px 0; color: var(--green-2); background: transparent;
+  cursor: pointer; font-size: 10px; font-weight: 800;
+}
 .privacy-pill { display: inline-flex; gap: 5px; align-items: center; margin-top: 4px; padding: 3px 7px; color: #735a13; background: #fff4ce; border-radius: 20px; font-size: 10px; }
+.monthly-chart-card { margin-top: 18px; }
+.budget-target { padding: 6px 10px; border-radius: 999px; color: var(--green); background: #e8f1e9; font-size: 11px; font-weight: 800; }
+.monthly-chart {
+  height: 210px; display: grid; grid-template-columns: repeat(6,minmax(42px,1fr)); gap: clamp(8px,2vw,20px);
+  align-items: end; padding-top: 10px;
+}
+.month-column { height: 100%; display: grid; grid-template-rows: 24px 1fr 20px; gap: 6px; align-items: end; text-align: center; }
+.month-column strong { overflow: hidden; color: var(--muted); font-size: 10px; font-weight: 700; white-space: nowrap; text-overflow: ellipsis; }
+.month-column small { color: var(--muted); font-size: 10px; text-transform: capitalize; }
+.month-track { height: 100%; display: flex; align-items: end; overflow: hidden; border-radius: 9px 9px 4px 4px; background: #edf1ec; }
+.month-track span { display: block; width: 100%; min-height: 3px; border-radius: inherit; background: linear-gradient(180deg,var(--green-2),var(--green)); transition: height 250ms ease; }
 .transactions { margin-top: 18px; overflow: hidden; }
 .transactions .panel-head { padding: 22px 23px 0; }
 .transaction-list { display: grid; }
@@ -155,6 +175,13 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .transaction-amount { font-weight: 800; text-align: right; }
 .transaction-amount.expense { color: #bc5543; }
 .transaction-amount.income { color: var(--green-2); }
+.transaction-end { display: grid; justify-items: end; gap: 5px; }
+.row-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.row-actions button {
+  border: 0; padding: 0; color: var(--green-2); background: transparent;
+  cursor: pointer; font-size: 10px; font-weight: 750;
+}
+.row-actions button.danger-link { color: #b65343; }
 .empty-state { padding: 34px 20px; text-align: center; color: var(--muted); }
 .goals-banner {
   margin-top: 18px; padding: 22px; display: grid; grid-template-columns: minmax(0,1fr) auto;
@@ -163,6 +190,7 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .goals-banner p { color: #bad0c5; margin: 6px 0 0; font-size: 13px; }
 .goal-row { background: rgba(255,255,255,.06); border-color: rgba(255,255,255,.12); }
 .goal-title-row { display: flex; justify-content: space-between; gap: 12px; }
+.goal-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .progress { height: 7px; overflow: hidden; border-radius: 12px; background: rgba(255,255,255,.14); margin: 9px 0 6px; }
 .progress span { display: block; height: 100%; background: var(--lime); border-radius: inherit; }
 .view-section { min-height: 360px; }
@@ -175,6 +203,10 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
 .household-settings { display: grid; gap: 12px; }
 .household-settings > div { padding: 15px; border: 1px solid var(--line); border-radius: 14px; background: #f8faf6; }
 .household-settings p { margin: 5px 0 0; }
+.household-settings .danger-zone { border-color: rgba(188,85,67,.28); background: #fff6f2; }
+.btn-danger { color: #fff; background: #b65343; }
+.reset-warning { padding: 17px; border: 1px solid rgba(188,85,67,.28); border-radius: 14px; color: #7e3428; background: #fff4ef; }
+.reset-warning p { margin: 7px 0 0; color: #85574f; font-size: 13px; line-height: 1.5; }
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 20px;
   background: rgba(13,35,27,.58); backdrop-filter: blur(6px);
@@ -267,8 +299,9 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
   .app-shell { display: block; padding-bottom: 68px; }
   .sidebar { display: none; }
   .main { padding: 21px 16px 32px; }
-  .topbar { align-items: flex-start; margin-bottom: 22px; }
-  .top-actions .period-select { display: none; }
+  .topbar { align-items: flex-start; flex-wrap: wrap; margin-bottom: 22px; }
+  .top-actions { width: 100%; justify-content: space-between; }
+  .top-actions .period-select { display: block; max-width: 148px; }
   .top-actions .btn-primary { display: none; }
   .quick-expense { display: none; }
   .mobile-operation-card {
@@ -286,6 +319,9 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
   .quick-presets button { min-height: 46px; }
   .summary-grid { grid-template-columns: 1fr; }
   .chart-wrap { grid-template-columns: 1fr; justify-items: center; }
+  .monthly-chart { height: 170px; grid-template-columns: repeat(6,minmax(0,1fr)); gap: 6px; }
+  .month-column { grid-template-rows: 1fr 20px; }
+  .month-column > strong { display: none; }
   .transaction-row { grid-template-columns: 40px 1fr auto; }
   .transaction-category, .transaction-date { display: none; }
   .goals-banner { grid-template-columns: 1fr; }
@@ -304,6 +340,9 @@ h1 { margin: 0; font-size: clamp(28px,4vw,44px); line-height: 1.05; letter-spaci
   .accounts-view { grid-template-columns: 1fr; }
   .goals-banner.view-section { padding: 20px; }
   .goal-title-row { display: grid; }
+  .goal-footer { align-items: flex-start; flex-direction: column; }
+  .row-actions { gap: 10px; }
+  .row-actions button { padding-block: 4px; }
   .mobile-nav {
     position: fixed; z-index: 20; left: 10px; right: 10px; bottom: 9px; display: grid;
     grid-template-columns: repeat(5,1fr); padding: 8px; border: 1px solid rgba(255,255,255,.15);
