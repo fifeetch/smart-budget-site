@@ -193,42 +193,54 @@ export default function BudgetApp() {
         return;
       }
 
-      const userRef = doc(db, "users", currentUser.uid);
-      const userSnap = await getDoc(userRef);
-      let nextHouseholdId = userSnap.data()?.householdId as string | undefined;
+      try {
+        const userRef = doc(db, "users", currentUser.uid);
+        const userSnap = await getDoc(userRef);
+        let nextHouseholdId = userSnap.data()?.householdId as string | undefined;
 
-      if (!nextHouseholdId) {
-        nextHouseholdId = currentUser.uid;
-        const batch = writeBatch(db);
-        batch.set(doc(db, "households", nextHouseholdId), {
-          name: `Foyer de ${currentUser.displayName || currentUser.email?.split("@")[0] || "Smart Budget"}`,
-          memberIds: [currentUser.uid],
-          memberEmails: [currentUser.email],
-          createdAt: Timestamp.now(),
-        });
-        batch.set(userRef, {
-          email: currentUser.email,
-          displayName: currentUser.displayName || "",
-          householdId: nextHouseholdId,
-          createdAt: Timestamp.now(),
-        });
-        batch.set(doc(db, "households", nextHouseholdId, "accounts", "principal"), {
-          name: "Compte principal",
-          type: "Courant",
-          balance: 0,
-          visibility: "shared",
-          ownerId: currentUser.uid,
-          createdAt: Timestamp.now(),
-        });
-        await batch.commit();
+        if (!nextHouseholdId) {
+          nextHouseholdId = currentUser.uid;
+          const batch = writeBatch(db);
+          batch.set(doc(db, "households", nextHouseholdId), {
+            name: `Foyer de ${currentUser.displayName || currentUser.email?.split("@")[0] || "Smart Budget"}`,
+            memberIds: [currentUser.uid],
+            memberEmails: [currentUser.email],
+            createdAt: Timestamp.now(),
+          });
+          batch.set(userRef, {
+            email: currentUser.email,
+            displayName: currentUser.displayName || "",
+            householdId: nextHouseholdId,
+            createdAt: Timestamp.now(),
+          });
+          await batch.commit();
+
+          // Le compte est créé après le foyer : les règles Firestore peuvent
+          // alors vérifier que l’utilisateur est bien membre du foyer.
+          await setDoc(doc(db, "households", nextHouseholdId, "accounts", "principal"), {
+            name: "Compte principal",
+            type: "Courant",
+            balance: 0,
+            visibility: "shared",
+            ownerId: currentUser.uid,
+            createdAt: Timestamp.now(),
+          });
+        }
+
+        setHouseholdId(nextHouseholdId);
+      } catch (error) {
+        console.error("Initialisation du foyer impossible", error);
+        setHouseholdId(null);
+        setToast("Votre espace budget n’a pas pu être préparé. Rechargez la page pour réessayer.");
       }
-
-      setHouseholdId(nextHouseholdId);
     });
   }, []);
 
   useEffect(() => {
-    if (!db || !householdId) return;
+    if (!db || !householdId) {
+      setToast("Votre espace budget n’est pas encore prêt. Rechargez la page puis réessayez.");
+      return;
+    }
     const base = `households/${householdId}`;
     const cleanups = [
       onSnapshot(collection(db, base, "accounts"), (snapshot) => {
@@ -377,18 +389,23 @@ export default function BudgetApp() {
       createdBy: user.uid,
       createdAt: Timestamp.now(),
     };
-    await addDoc(collection(db, "households", householdId, "transactions"), transaction);
-    const account = accounts.find((item) => item.id === transaction.accountId);
-    if (account) {
-      await setDoc(
-        doc(db, "households", householdId, "accounts", account.id),
-        { balance: Number(account.balance || 0) + (transaction.type === "income" ? amount : -amount) },
-        { merge: true },
-      );
+    try {
+      await addDoc(collection(db, "households", householdId, "transactions"), transaction);
+      const account = accounts.find((item) => item.id === transaction.accountId);
+      if (account) {
+        await setDoc(
+          doc(db, "households", householdId, "accounts", account.id),
+          { balance: Number(account.balance || 0) + (transaction.type === "income" ? amount : -amount) },
+          { merge: true },
+        );
+      }
+      setModal(null);
+      setSelectedReason(operationReasons[transactionType][0].label);
+      setToast("Mouvement ajouté au budget.");
+    } catch (error) {
+      console.error("Enregistrement de l’opération impossible", error);
+      setToast("La dépense n’a pas pu être enregistrée. Vérifiez votre connexion puis réessayez.");
     }
-    setModal(null);
-    setSelectedReason(operationReasons[transactionType][0].label);
-    setToast("Mouvement ajouté au budget.");
   };
 
   const addAccount = async (event: FormEvent<HTMLFormElement>) => {
