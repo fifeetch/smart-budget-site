@@ -59,6 +59,7 @@ type Goal = {
 const categoryIcons: Record<string, string> = {
   Alimentation: "◒",
   Logement: "⌂",
+  Charges: "▤",
   Transport: "↗",
   Loisirs: "✦",
   Santé: "+",
@@ -66,6 +67,33 @@ const categoryIcons: Record<string, string> = {
   Salaire: "↓",
   Autre: "•",
 };
+
+const operationReasons: Record<TransactionType, { label: string; category: string }[]> = {
+  expense: [
+    { label: "Courses", category: "Alimentation" },
+    { label: "Carburant", category: "Transport" },
+    { label: "Facture d’électricité", category: "Charges" },
+    { label: "Loyer", category: "Logement" },
+    { label: "Restaurant ou sortie", category: "Loisirs" },
+    { label: "Santé", category: "Santé" },
+    { label: "Abonnement", category: "Abonnements" },
+    { label: "Autre dépense", category: "Autre" },
+  ],
+  income: [
+    { label: "Salaire", category: "Salaire" },
+    { label: "Remboursement", category: "Autre" },
+    { label: "Allocation", category: "Autre" },
+    { label: "Autre revenu", category: "Autre" },
+  ],
+};
+
+const navigationItems = [
+  ["▦", "Vue d’ensemble"],
+  ["↕", "Transactions"],
+  ["▣", "Comptes"],
+  ["◎", "Projets"],
+  ["♙", "Mon foyer"],
+] as const;
 
 const demoAccounts: Account[] = [
   { id: "joint", name: "Compte joint", type: "Courant", balance: 2847.55, visibility: "shared", ownerId: "demo" },
@@ -147,10 +175,11 @@ export default function BudgetApp() {
   const [authError, setAuthError] = useState("");
   const [toast, setToast] = useState("");
   const [activeNav, setActiveNav] = useState("Vue d’ensemble");
+  const [selectedPeriod, setSelectedPeriod] = useState("2026-07");
   const [csvPreview, setCsvPreview] = useState<ReturnType<typeof parseCsv>>([]);
   const [transactionType, setTransactionType] = useState<TransactionType>("expense");
   const [selectedCategory, setSelectedCategory] = useState("Alimentation");
-  const [expenseLabel, setExpenseLabel] = useState("");
+  const [selectedReason, setSelectedReason] = useState("Courses");
 
   useEffect(() => {
     if (!auth) return;
@@ -227,12 +256,14 @@ export default function BudgetApp() {
   );
   const visibleIds = useMemo(() => new Set(visibleAccounts.map((account) => account.id)), [visibleAccounts]);
   const visibleTransactions = useMemo(
-    () => transactions.filter((transaction) => visibleIds.has(transaction.accountId)),
-    [transactions, visibleIds],
+    () => transactions.filter((transaction) => visibleIds.has(transaction.accountId) && transaction.date.startsWith(selectedPeriod)),
+    [transactions, visibleIds, selectedPeriod],
   );
   const income = visibleTransactions.filter((item) => item.type === "income").reduce((sum, item) => sum + item.amount, 0);
   const expenses = visibleTransactions.filter((item) => item.type === "expense").reduce((sum, item) => sum + item.amount, 0);
   const balance = visibleAccounts.reduce((sum, account) => sum + Number(account.balance || 0), 0);
+  const budgetUsage = income ? Math.min(100, Math.round((expenses / income) * 100)) : 0;
+  const remainingBudget = Math.max(0, income - expenses);
 
   const requireUser = (next: Exclude<ModalName, "auth" | null>) => {
     if (!user) {
@@ -247,8 +278,29 @@ export default function BudgetApp() {
   const openQuickExpense = (category = "Alimentation", label = "") => {
     setTransactionType("expense");
     setSelectedCategory(category);
-    setExpenseLabel(label);
+    setSelectedReason(operationReasons.expense.find((reason) => reason.label === label)?.label || operationReasons.expense[0].label);
     requireUser("transaction");
+  };
+
+  const chooseOperationType = (type: TransactionType) => {
+    const firstReason = operationReasons[type][0];
+    setTransactionType(type);
+    setSelectedReason(firstReason.label);
+    setSelectedCategory(firstReason.category);
+  };
+
+  const chooseReason = (label: string) => {
+    const reason = operationReasons[transactionType].find((item) => item.label === label);
+    setSelectedReason(label);
+    if (reason) setSelectedCategory(reason.category);
+  };
+
+  const showMobileOperation = () => {
+    setActiveNav("Vue d’ensemble");
+    window.setTimeout(() => {
+      document.getElementById("mobile-operation")?.scrollIntoView({ behavior: "smooth", block: "start" });
+      document.getElementById("mobile-amount")?.focus();
+    }, 0);
   };
 
   useEffect(() => {
@@ -257,9 +309,7 @@ export default function BudgetApp() {
       const isTyping = target?.matches("input, textarea, select, [contenteditable='true']");
       if (!isTyping && !modal && event.key.toLowerCase() === "e") {
         event.preventDefault();
-        setTransactionType("expense");
-        setSelectedCategory("Alimentation");
-        setExpenseLabel("");
+        chooseOperationType("expense");
         if (user) {
           setModal("transaction");
         } else {
@@ -306,14 +356,22 @@ export default function BudgetApp() {
 
   const addTransaction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!db || !householdId || !user) return;
+    if (!user) {
+      setAuthMode("signin");
+      setModal("auth");
+      setToast("Connectez-vous pour enregistrer cette opération.");
+      return;
+    }
+    if (!db || !householdId) return;
     const data = new FormData(event.currentTarget);
     const amount = Number(String(data.get("amount")).replace(",", "."));
+    const reasonLabel = String(data.get("reason") || selectedReason);
+    const reason = operationReasons[transactionType].find((item) => item.label === reasonLabel);
     const transaction = {
-      label: String(data.get("label")),
+      label: reason?.label || reasonLabel,
       amount,
       type: transactionType,
-      category: selectedCategory,
+      category: reason?.category || selectedCategory,
       accountId: String(data.get("accountId")),
       date: String(data.get("date")),
       createdBy: user.uid,
@@ -329,7 +387,7 @@ export default function BudgetApp() {
       );
     }
     setModal(null);
-    setExpenseLabel("");
+    setSelectedReason(operationReasons[transactionType][0].label);
     setToast("Mouvement ajouté au budget.");
   };
 
@@ -390,13 +448,7 @@ export default function BudgetApp() {
         <div className="brand"><span className="brand-mark">S</span><span>Smart Budget</span></div>
         <div className="household-pill"><small>Espace du foyer</small><strong>{user ? "Mon foyer" : "Foyer Démo"}</strong></div>
         <nav className="nav" aria-label="Navigation principale">
-          {[
-            ["▦", "Vue d’ensemble"],
-            ["↕", "Transactions"],
-            ["▣", "Comptes"],
-            ["◎", "Projets"],
-            ["♙", "Mon foyer"],
-          ].map(([icon, label]) => (
+          {navigationItems.map(([icon, label]) => (
             <button key={label} className={activeNav === label ? "active" : ""} onClick={() => setActiveNav(label)}>
               <span className="nav-icon">{icon}</span><span className="nav-label">{label}</span>
             </button>
@@ -415,10 +467,14 @@ export default function BudgetApp() {
         <header className="topbar">
           <div>
             <p className="eyebrow">Votre budget, ensemble</p>
-            <h1>Bonjour {user?.displayName?.split(" ")[0] || "à vous"}.</h1>
+            <h1>{activeNav === "Vue d’ensemble" ? `Bonjour ${user?.displayName?.split(" ")[0] || "à vous"}.` : activeNav}</h1>
           </div>
           <div className="top-actions">
-            <select className="period-select" aria-label="Période"><option>Juillet 2026</option></select>
+            <select className="period-select" aria-label="Période" value={selectedPeriod} onChange={(event) => setSelectedPeriod(event.target.value)}>
+              <option value="2026-07">Juillet 2026</option>
+              <option value="2026-06">Juin 2026</option>
+              <option value="2026-05">Mai 2026</option>
+            </select>
             {user ? (
               <button className="btn btn-soft" onClick={() => auth && signOut(auth)}>Déconnexion</button>
             ) : (
@@ -428,12 +484,43 @@ export default function BudgetApp() {
           </div>
         </header>
 
+        {activeNav === "Vue d’ensemble" && (
+          <>
         {!user && (
           <div className="goals-banner card" style={{ marginTop: 0, marginBottom: 18 }}>
             <div><strong>Explorez Smart Budget avec des données d’exemple.</strong><p>Créez votre compte pour connecter votre propre foyer et conserver vos données.</p></div>
             <button className="btn btn-lime" onClick={() => { setAuthMode("signup"); setModal("auth"); }}>Créer mon espace</button>
           </div>
         )}
+
+        <section id="mobile-operation" className="mobile-operation-card card" aria-label="Ajouter une opération">
+          <div className="mobile-operation-head">
+            <div><h2 className="panel-title">Ajouter une opération</h2><p>Une dépense ou un revenu en quelques secondes.</p></div>
+            <span className="quick-badge">Rapide</span>
+          </div>
+          <form onSubmit={addTransaction} className="mobile-operation-form">
+            <div className="segmented">
+              <button type="button" className={transactionType === "expense" ? "active" : ""} onClick={() => chooseOperationType("expense")}>Dépense</button>
+              <button type="button" className={transactionType === "income" ? "active" : ""} onClick={() => chooseOperationType("income")}>Revenu</button>
+            </div>
+            <label className="label amount-label">
+              Montant
+              <span className="amount-wrap"><input id="mobile-amount" className="field amount-input" name="amount" inputMode="decimal" placeholder="0,00" required /><b>€</b></span>
+            </label>
+            <label className="label">
+              Motif {transactionType === "expense" ? "de la dépense" : "du revenu"}
+              <select className="field" name="reason" value={selectedReason} onChange={(event) => chooseReason(event.target.value)}>
+                {operationReasons[transactionType].map((reason) => <option key={reason.label}>{reason.label}</option>)}
+              </select>
+            </label>
+            <div className="category-auto"><span>{categoryIcons[selectedCategory] || "•"}</span> Catégorie automatique : <strong>{selectedCategory}</strong></div>
+            <div className="form-grid expense-details">
+              <label className="label">Compte<select className="field" name="accountId">{visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
+              <label className="label">Date<input className="field" type="date" name="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
+            </div>
+            <button className="btn btn-primary mobile-save-operation">{transactionType === "expense" ? "Enregistrer la dépense" : "Enregistrer le revenu"}</button>
+          </form>
+        </section>
 
         <section className="quick-expense card" aria-label="Ajouter rapidement une dépense">
           <div className="quick-expense-copy">
@@ -443,8 +530,8 @@ export default function BudgetApp() {
           <div className="quick-presets">
             {[
               ["Alimentation", "Courses", "◒"],
-              ["Transport", "Transport", "↗"],
-              ["Loisirs", "Sortie", "✦"],
+              ["Transport", "Carburant", "↗"],
+              ["Loisirs", "Restaurant ou sortie", "✦"],
             ].map(([category, label, icon]) => (
               <button key={category} onClick={() => openQuickExpense(category, label)}>
                 <span>{icon}</span>{label}
@@ -452,6 +539,15 @@ export default function BudgetApp() {
             ))}
             <button className="quick-main" onClick={() => openQuickExpense()}>＋ Autre dépense</button>
           </div>
+        </section>
+
+        <section className="budget-usage card" aria-label={`${budgetUsage} pour cent du budget utilisé`}>
+          <div className="budget-usage-head">
+            <div><strong>Budget utilisé</strong><span>{money.format(expenses)} sur {money.format(income)}</span></div>
+            <b>{budgetUsage} %</b>
+          </div>
+          <div className="budget-usage-track"><span style={{ width: `${budgetUsage}%` }} /></div>
+          <div className="budget-usage-foot"><span>Reste disponible ce mois</span><strong>{money.format(remainingBudget)}</strong></div>
         </section>
 
         <section className="summary-grid" aria-label="Résumé du budget">
@@ -526,10 +622,98 @@ export default function BudgetApp() {
           </div>
           <button className="btn btn-lime" onClick={() => requireUser("goal")}>＋ Nouveau projet</button>
         </section>
+          </>
+        )}
+
+        {activeNav === "Transactions" && (
+          <section className="card transactions view-section">
+            <div className="panel-head">
+              <div><h2 className="panel-title">Toutes les opérations</h2><p className="muted">Dépenses et revenus de la période sélectionnée.</p></div>
+              <div className="view-actions"><button className="btn btn-soft" onClick={() => requireUser("csv")}>Importer un CSV</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
+            </div>
+            <div className="transaction-list">
+              {visibleTransactions.length ? visibleTransactions.map((transaction) => (
+                <div className="transaction-row" key={transaction.id}>
+                  <span className="transaction-icon">{categoryIcons[transaction.category] || "•"}</span>
+                  <div><div className="transaction-label">{transaction.label}</div><div className="muted">{visibleAccounts.find((account) => account.id === transaction.accountId)?.name || "Compte"}</div></div>
+                  <div className="transaction-category">{transaction.category}</div>
+                  <div className="transaction-date">{displayDate.format(new Date(transaction.date))}</div>
+                  <div className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : "−"} {money.format(transaction.amount)}</div>
+                </div>
+              )) : <div className="empty-state">Aucune opération pour cette période.</div>}
+            </div>
+          </section>
+        )}
+
+        {activeNav === "Comptes" && (
+          <section className="card panel view-section">
+            <div className="panel-head">
+              <div><h2 className="panel-title">Comptes visibles</h2><p className="muted">Les comptes personnels restent privés selon vos réglages.</p></div>
+              <button className="btn btn-primary" onClick={() => requireUser("account")}>＋ Ajouter un compte</button>
+            </div>
+            <div className="account-list accounts-view">
+              {visibleAccounts.map((account) => (
+                <div className="account-row" key={account.id}>
+                  <span className="account-icon">{account.type === "Épargne" ? "◇" : "▰"}</span>
+                  <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type}</div>{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
+                  <div className="account-amount">{money.format(Number(account.balance || 0))}</div>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {activeNav === "Projets" && (
+          <section className="card goals-banner view-section">
+            <div>
+              <h2 className="panel-title">Dépenses futures et projets</h2>
+              <p>Préparez vos vacances, travaux ou achats grâce à une mensualité conseillée.</p>
+              <div className="goal-list goals-view">
+                {goals.length ? goals.map((goal) => (
+                  <div className="goal-row" key={goal.id}>
+                    <div className="goal-title-row"><strong>{goal.name}</strong><span>{money.format(goal.saved)} / {money.format(goal.target)}</span></div>
+                    <div className="progress"><span style={{ width: `${Math.min(100, (goal.saved / goal.target) * 100)}%` }} /></div>
+                    <div className="muted">{money.format(goal.monthly)} / mois conseillé · objectif {displayDate.format(new Date(goal.dueDate))}</div>
+                  </div>
+                )) : <div className="empty-state">Aucun projet planifié.</div>}
+              </div>
+            </div>
+            <button className="btn btn-lime" onClick={() => requireUser("goal")}>＋ Nouveau projet</button>
+          </section>
+        )}
+
+        {activeNav === "Mon foyer" && (
+          <section className="card panel view-section household-view">
+            <div className="profile-card">
+              <span className="avatar profile-avatar">{(user?.displayName || user?.email || "D").slice(0, 1).toUpperCase()}</span>
+              <div><h2 className="panel-title">{user?.displayName || "Mode découverte"}</h2><p className="muted">{user?.email || "Connectez-vous pour créer votre foyer."}</p></div>
+            </div>
+            <div className="household-settings">
+              <div><strong>Partage familial</strong><p className="muted">Chaque membre utilise son propre accès Firebase.</p></div>
+              <div><strong>Confidentialité des comptes</strong><p className="muted">Un compte personnel peut rester visible uniquement par son propriétaire.</p></div>
+            </div>
+            {user ? <button className="btn btn-soft" onClick={() => auth && signOut(auth)}>Se déconnecter</button> : <button className="btn btn-primary" onClick={() => setModal("auth")}>Se connecter ou créer un compte</button>}
+          </section>
+        )}
       </main>
 
       <nav className="mobile-nav" aria-label="Navigation mobile">
-        {["▦", "↕", "＋", "◎", "♙"].map((icon, index) => <button key={`${icon}-${index}`} aria-label={index === 2 ? "Ajouter une dépense" : undefined} className={index === 0 ? "active" : index === 2 ? "add-mobile" : ""} onClick={() => index === 2 && openQuickExpense()}>{icon}</button>)}
+        {[
+          ["▦", "Vue d’ensemble"],
+          ["↕", "Transactions"],
+          ["＋", "Ajouter"],
+          ["◎", "Projets"],
+          ["♙", "Mon foyer"],
+        ].map(([icon, label], index) => (
+          <button
+            key={label}
+            aria-label={label}
+            className={index === 2 ? "add-mobile" : activeNav === label ? "active" : ""}
+            onClick={() => index === 2 ? showMobileOperation() : setActiveNav(label)}
+          >
+            <span>{icon}</span><small>{label === "Vue d’ensemble" ? "Accueil" : label}</small>
+          </button>
+        ))}
       </nav>
 
       <button className="expense-fab" onClick={() => openQuickExpense()} aria-label="Ajouter rapidement une dépense">
@@ -557,29 +741,20 @@ export default function BudgetApp() {
           <form onSubmit={addTransaction}>
             <div className="expense-form">
               <div className="segmented expense-type">
-                <button type="button" className={transactionType === "expense" ? "active" : ""} onClick={() => { setTransactionType("expense"); setSelectedCategory("Alimentation"); }}>Dépense</button>
-                <button type="button" className={transactionType === "income" ? "active" : ""} onClick={() => { setTransactionType("income"); setSelectedCategory("Salaire"); }}>Revenu</button>
+                <button type="button" className={transactionType === "expense" ? "active" : ""} onClick={() => chooseOperationType("expense")}>Dépense</button>
+                <button type="button" className={transactionType === "income" ? "active" : ""} onClick={() => chooseOperationType("income")}>Revenu</button>
               </div>
               <label className="label amount-label">
                 Montant
                 <span className="amount-wrap"><input className="field amount-input" name="amount" inputMode="decimal" placeholder="0,00" autoFocus required /><b>€</b></span>
               </label>
               <label className="label">
-                Pour quoi ?
-                <input className="field" name="label" value={expenseLabel} onChange={(event) => setExpenseLabel(event.target.value)} placeholder={transactionType === "expense" ? "Ex. Courses, café, essence…" : "Ex. Salaire, remboursement…"} required />
+                Motif {transactionType === "expense" ? "de la dépense" : "du revenu"}
+                <select className="field" name="reason" value={selectedReason} onChange={(event) => chooseReason(event.target.value)}>
+                  {operationReasons[transactionType].map((reason) => <option key={reason.label}>{reason.label}</option>)}
+                </select>
               </label>
-              <fieldset className="category-fieldset">
-                <legend>Catégorie</legend>
-                <div className="category-chips">
-                  {Object.keys(categoryIcons)
-                    .filter((name) => transactionType === "income" ? ["Salaire", "Autre"].includes(name) : name !== "Salaire")
-                    .map((name) => (
-                      <button type="button" key={name} className={selectedCategory === name ? "active" : ""} onClick={() => setSelectedCategory(name)}>
-                        <span>{categoryIcons[name]}</span>{name}
-                      </button>
-                    ))}
-                </div>
-              </fieldset>
+              <div className="category-auto"><span>{categoryIcons[selectedCategory] || "•"}</span> Catégorie automatique : <strong>{selectedCategory}</strong></div>
               <div className="form-grid expense-details">
                 <label className="label">Compte<select className="field" name="accountId">{visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label>
                 <label className="label">Date<input className="field" type="date" name="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
