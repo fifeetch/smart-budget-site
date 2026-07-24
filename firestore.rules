@@ -1,0 +1,157 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function householdMember(householdId) {
+      return signedIn() &&
+        request.auth.uid in get(/databases/$(database)/documents/households/$(householdId)).data.memberIds;
+    }
+
+    function validMoney(value) {
+      return value is number && value > -1000000000 && value < 1000000000;
+    }
+
+    function validAccount(data) {
+      return data.name is string &&
+        data.name.size() > 0 &&
+        data.name.size() <= 120 &&
+        data.type is string &&
+        validMoney(data.balance) &&
+        data.visibility in ['shared', 'private'] &&
+        data.ownerId is string;
+    }
+
+    function validTransaction(data) {
+      return data.label is string &&
+        data.label.size() > 0 &&
+        data.label.size() <= 300 &&
+        data.category is string &&
+        data.accountId is string &&
+        data.date is string &&
+        data.type in ['expense', 'income'] &&
+        data.amount is number &&
+        data.amount > 0 &&
+        data.amount < 1000000000;
+    }
+
+    function invitedByEmail() {
+      return signedIn() &&
+        request.auth.token.email != null &&
+        request.auth.token.email in resource.data.memberEmails;
+    }
+
+    function joinsInvitedHousehold() {
+      return invitedByEmail() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['memberIds']) &&
+        request.resource.data.memberIds.hasAll(resource.data.memberIds) &&
+        request.resource.data.memberIds.size() == resource.data.memberIds.size() + 1 &&
+        request.auth.uid in request.resource.data.memberIds;
+    }
+
+    function updatesHouseholdSettings() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'name',
+        'monthlyBudget',
+        'visibleReasons',
+        'memberEmails'
+      ]) &&
+        request.resource.data.memberIds == resource.data.memberIds &&
+        (!('ownerId' in resource.data) ||
+          request.resource.data.ownerId == resource.data.ownerId);
+    }
+
+    function accountVisibleToMember(householdId, accountId) {
+      let account = get(/databases/$(database)/documents/households/$(householdId)/accounts/$(accountId)).data;
+      return account.visibility == "shared" || account.ownerId == request.auth.uid;
+    }
+
+    function accountResourceVisibleToMember() {
+      return resource.data.visibility == "shared" || resource.data.ownerId == request.auth.uid;
+    }
+
+    match /users/{userId} {
+      allow read, create, update: if signedIn() &&
+        request.auth.uid == userId &&
+        (!('email' in request.resource.data) ||
+          request.auth.token.email == request.resource.data.email);
+    }
+
+    match /households/{householdId} {
+      allow create: if signedIn() &&
+        request.resource.data.memberIds == [request.auth.uid] &&
+        request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.monthlyBudget is number &&
+        request.resource.data.monthlyBudget >= 0;
+      allow read: if householdMember(householdId) || invitedByEmail();
+      allow update: if joinsInvitedHousehold() ||
+        (householdMember(householdId) && updatesHouseholdSettings());
+
+      match /accounts/{accountId} {
+        allow create: if householdMember(householdId) &&
+          validAccount(request.resource.data) &&
+          request.resource.data.ownerId == request.auth.uid;
+        allow read: if householdMember(householdId) &&
+          accountResourceVisibleToMember();
+        allow update: if householdMember(householdId) &&
+          accountResourceVisibleToMember() &&
+          accountVisibleToMember(householdId, accountId) &&
+          validAccount(request.resource.data) &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          (request.resource.data.visibility == resource.data.visibility ||
+            resource.data.ownerId == request.auth.uid);
+        allow delete: if householdMember(householdId) &&
+          resource.data.ownerId == request.auth.uid;
+      }
+
+      match /transactions/{transactionId} {
+        allow create: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, request.resource.data.accountId) &&
+          validTransaction(request.resource.data) &&
+          request.resource.data.createdBy == request.auth.uid;
+        allow read: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, resource.data.accountId);
+        allow update: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, resource.data.accountId) &&
+          accountVisibleToMember(householdId, request.resource.data.accountId) &&
+          validTransaction(request.resource.data) &&
+          request.resource.data.createdBy == resource.data.createdBy;
+        allow delete: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, resource.data.accountId);
+      }
+
+      match /goals/{goalId} {
+        allow read, create, update, delete: if householdMember(householdId);
+      }
+
+      match /budgetPlans/{planId} {
+        allow read, create, update, delete: if householdMember(householdId);
+      }
+
+      match /recurringExpenses/{recurringId} {
+        allow read: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, resource.data.accountId);
+        allow update: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, resource.data.accountId) &&
+          accountVisibleToMember(householdId, request.resource.data.accountId) &&
+          request.resource.data.amount is number &&
+          request.resource.data.amount > 0 &&
+          request.resource.data.day is int &&
+          request.resource.data.day >= 1 &&
+          request.resource.data.day <= 28;
+        allow delete: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, resource.data.accountId);
+        allow create: if householdMember(householdId) &&
+          accountVisibleToMember(householdId, request.resource.data.accountId) &&
+          request.resource.data.amount is number &&
+          request.resource.data.amount > 0 &&
+          request.resource.data.day is int &&
+          request.resource.data.day >= 1 &&
+          request.resource.data.day <= 28;
+      }
+    }
+  }
+}
