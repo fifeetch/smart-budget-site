@@ -64,6 +64,11 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(app, /isRecurringPeriodDue/);
   assert.match(app, /balanceVerifiedAt/);
   assert.match(app, /rowsToImport\.length > 450/);
+  assert.match(app, /sendPasswordResetEmail/);
+  assert.match(app, /undoLastImport/);
+  assert.match(app, /transactionSearch/);
+  assert.match(app, /Solde prévisionnel en fin de période/);
+  assert.match(app, /plan\.percent > 100 \? "over-budget"/);
   assert.match(layout, /Smart Budget/);
   const rules = await readFile(new URL("../firestore.rules", import.meta.url), "utf8");
   assert.match(rules, /joinsInvitedHousehold/);
@@ -73,4 +78,7 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(rules, /match \/users\/\{userId\}[\s\S]*allow read: if signedIn\(\) && request\.auth\.uid == userId;/);
   assert.match(css, /\.monthly-chart/);
   assert.match(css, /\.btn-danger/);
+  assert.match(css, /\.budget-tile\.over-budget/);
+  assert.match(css, /--danger-soft/);
+  assert.match(css, /\.cash-forecast/);
 });
