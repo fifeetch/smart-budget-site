@@ -11,7 +11,7 @@
     "name": "rolldown-runtime"
   },
   "app/BudgetApp.tsx": {
-    "file": "assets/BudgetApp-RFUFvb4n.js",
+    "file": "assets/BudgetApp-gC8Yyj6-.js",
     "name": "BudgetApp",
     "src": "app/BudgetApp.tsx",
     "isDynamicEntry": true,
@@ -21,7 +21,7 @@
     ]
   },
   "node_modules/vinext/dist/shims/layout-segment-context.js": {
-    "file": "assets/layout-segment-context-DFSHghD6.js",
+    "file": "assets/layout-segment-context-DvxW8fDk.js",
     "name": "layout-segment-context",
     "src": "node_modules/vinext/dist/shims/layout-segment-context.js",
     "isDynamicEntry": true,
@@ -32,7 +32,7 @@
     ]
   },
   "virtual:vinext-app-browser-entry": {
-    "file": "assets/index-DUNANADK.js",
+    "file": "assets/index-5fEtikJS.js",
     "name": "index",
     "src": "virtual:vinext-app-browser-entry",
     "isEntry": true,
