@@ -70,6 +70,7 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(rules, /updatesHouseholdSettings/);
   assert.match(rules, /validTransaction/);
   assert.match(rules, /request\.resource\.data\.ownerId == resource\.data\.ownerId/);
+  assert.match(rules, /match \/users\/\{userId\}[\s\S]*allow read: if signedIn\(\) && request\.auth\.uid == userId;/);
   assert.match(css, /\.monthly-chart/);
   assert.match(css, /\.btn-danger/);
 });
