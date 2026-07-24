@@ -74,7 +74,8 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow read, create, update: if signedIn() &&
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow create, update: if signedIn() &&
         request.auth.uid == userId &&
         (!('email' in request.resource.data) ||
           request.auth.token.email == request.resource.data.email);
