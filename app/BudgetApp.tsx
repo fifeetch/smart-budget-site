@@ -107,6 +107,8 @@ type CsvDuplicateCandidate = {
   row: ReturnType<typeof parseBankCsv>["rows"][number];
   existing: Transaction;
   daysApart: number;
+  matchedAccountName: string;
+  matchedDate: string;
 };
 
 type LastImport = {
@@ -805,22 +807,36 @@ export default function BudgetApp() {
     || (csvCustomBalance.trim() !== "" && Number.isFinite(parsedCsvCustomBalance));
   const csvDuplicateCandidates = useMemo<CsvDuplicateCandidate[]>(() => {
     if (!csvAccountId || !csvPreview.length) return [];
+    const duplicateAccountIds = new Set([csvAccountId]);
+    if (selectedCsvAccount?.type === "Carte" && selectedCsvAccount.debitAccountId) duplicateAccountIds.add(selectedCsvAccount.debitAccountId);
     const candidates: CsvDuplicateCandidate[] = [];
     csvPreview.forEach((row, index) => {
       const existing = allVisibleTransactions.find((transaction) => {
-        if (transaction.accountId !== csvAccountId || transaction.type !== row.type || Math.abs(transaction.amount - row.amount) > 0.01) return false;
-        const apart = daysBetween(transaction.date, row.date);
-        if (apart > 2) return false;
+        if (!duplicateAccountIds.has(transaction.accountId) || transaction.type !== row.type || Math.abs(transaction.amount - row.amount) > 0.01) return false;
+        const candidateDates = [row.date, row.debitDate].filter(Boolean) as string[];
+        const apart = Math.min(...candidateDates.map((date) => daysBetween(transaction.date, date)));
+        if (apart > 3) return false;
         const rowLabel = normalizeMatchLabel(row.label);
         const existingLabel = normalizeMatchLabel(transaction.label);
         return apart === 0 || rowLabel === existingLabel || rowLabel.includes(existingLabel) || existingLabel.includes(rowLabel);
       });
-      if (existing) candidates.push({ row: { ...row, id: row.id || `csv-${index}` }, existing, daysApart: daysBetween(existing.date, row.date) });
+      if (existing) {
+        const matchedDate = [row.date, row.debitDate].filter(Boolean).sort((a, b) => daysBetween(existing.date, a) - daysBetween(existing.date, b))[0] || row.date;
+        candidates.push({
+          row: { ...row, id: row.id || `csv-${index}` },
+          existing,
+          daysApart: daysBetween(existing.date, matchedDate),
+          matchedDate,
+          matchedAccountName: visibleAccounts.find((account) => account.id === existing.accountId)?.name || "Compte",
+        });
+      }
     });
     return candidates;
-  }, [allVisibleTransactions, csvAccountId, csvPreview]);
+  }, [allVisibleTransactions, csvAccountId, csvPreview, selectedCsvAccount, visibleAccounts]);
   const csvDuplicateIds = useMemo(() => new Set(csvDuplicateCandidates.map((candidate) => candidate.row.id)), [csvDuplicateCandidates]);
   const csvRowsToImport = useMemo(() => csvPreview.filter((row) => !csvDuplicateIds.has(row.id) || csvDuplicateDecisions[row.id]), [csvDuplicateDecisions, csvDuplicateIds, csvPreview]);
+  const csvHasDebitDates = csvPreview.some((row) => row.debitDate);
+  const csvDebitDateCount = new Set(csvPreview.map((row) => row.debitDate).filter(Boolean)).size;
   const csvIncome = csvRowsToImport.filter((row) => row.type === "income").reduce((sum, row) => sum + row.amount, 0);
   const csvExpenses = csvRowsToImport.filter((row) => row.type === "expense").reduce((sum, row) => sum + row.amount, 0);
   const csvImpact = csvIncome - csvExpenses;
@@ -1777,7 +1793,7 @@ export default function BudgetApp() {
       setToast("Sélectionnez le compte concerné par ce relevé.");
       return;
     }
-    if (account.type === "Carte" && !csvDebitDate) {
+    if (account.type === "Carte" && !csvHasDebitDates && !csvDebitDate) {
       setToast("Indiquez la date à laquelle la carte sera débitée.");
       return;
     }
@@ -1809,7 +1825,7 @@ export default function BudgetApp() {
         importBatchId: `demo-import-${importedAt}`,
         originalLabel: row.originalLabel || row.label,
         accountId,
-        ...(selectedCsvAccount?.type === "Carte" && csvDebitDate ? { debitDate: csvDebitDate } : {}),
+        ...(selectedCsvAccount?.type === "Carte" ? { debitDate: row.debitDate || csvDebitDate } : {}),
         createdBy: "demo",
       }));
       setTransactions((current) => [...rows, ...current]);
@@ -1838,7 +1854,7 @@ export default function BudgetApp() {
         void temporaryId;
         const reference = doc(collection(db, "households", householdId, "transactions"));
         importedIds.push(reference.id);
-        batch.set(reference, { ...transaction, importBatchId, originalLabel: transaction.originalLabel || transaction.label, accountId, ...(selectedCsvAccount?.type === "Carte" && csvDebitDate ? { debitDate: csvDebitDate } : {}), createdBy: user.uid, imported: true, createdAt: Timestamp.now() });
+        batch.set(reference, { ...transaction, importBatchId, originalLabel: transaction.originalLabel || transaction.label, accountId, ...(selectedCsvAccount?.type === "Carte" ? { debitDate: transaction.debitDate || csvDebitDate } : {}), createdBy: user.uid, imported: true, createdAt: Timestamp.now() });
       });
       if (csvBalanceMode === "calculate") {
         batch.update(doc(db, "households", householdId, "accounts", accountId), {
@@ -2461,7 +2477,7 @@ export default function BudgetApp() {
               </select>
             </label>
           </div>
-          {selectedCsvAccount?.type === "Carte" && <div className="import-balance-card card-import-note"><strong>💳 Carte à débit différé</strong><p className="muted">Les opérations seront rattachées à la carte. Le compte débité ne sera pas modifié avant la date indiquée.</p>{selectedCsvDebitAccount ? <p className="deferred-link-note">Compte débité : <strong>{selectedCsvDebitAccount.name}</strong></p> : <p className="deferred-link-warning">Associez un compte débité dans « Comptes » pour suivre automatiquement l’encours.</p>}<label className="label">Date de débit prévue<input className="field" type="date" value={csvDebitDate} onChange={(event) => setCsvDebitDate(event.target.value)} required /></label></div>}
+          {selectedCsvAccount?.type === "Carte" && <div className="import-balance-card card-import-note"><strong>💳 Carte à débit différé</strong><p className="muted">Les opérations seront rattachées à la carte. Le compte débité ne sera pas modifié avant le prélèvement réel.</p>{selectedCsvDebitAccount ? <p className="deferred-link-note">Compte débité : <strong>{selectedCsvDebitAccount.name}</strong></p> : <p className="deferred-link-warning">Associez un compte débité dans « Comptes » pour suivre automatiquement l’encours.</p>}{csvHasDebitDates && <p className="deferred-link-note">{csvDebitDateCount} date(s) de prélèvement détectée(s) dans le fichier.</p>}<label className="label">{csvHasDebitDates ? "Date de débit par défaut si absente du CSV" : "Date de débit prévue"}<input className="field" type="date" value={csvDebitDate} onChange={(event) => setCsvDebitDate(event.target.value)} required={!csvHasDebitDates} /></label></div>}
           <div
             className={`drop-zone ${csvError ? "drop-zone-error" : csvFileName ? "drop-zone-ready" : ""}`}
             onDragOver={(event) => event.preventDefault()}
@@ -2478,13 +2494,14 @@ export default function BudgetApp() {
           {csvError && <div className="csv-error" role="alert"><strong>Import impossible</strong><span>{csvError}</span><small>Colonnes attendues : Date, Libellé et Montant — ou Débit / Crédit.</small></div>}
           {csvPreview.length > 0 && (
             <>
-              {csvDuplicateCandidates.length > 0 && <div className="csv-duplicate-review" role="region" aria-label="Contrôle des doublons"><strong>{csvDuplicateCandidates.length} doublon(s) possible(s)</strong><p>Ces opérations ressemblent à des dépenses déjà saisies manuellement. Cochez uniquement celles que vous souhaitez importer malgré tout.</p>{csvDuplicateCandidates.map((candidate) => <label className="duplicate-row" key={candidate.row.id}><input type="checkbox" checked={Boolean(csvDuplicateDecisions[candidate.row.id])} onChange={(event) => setCsvDuplicateDecisions((current) => ({ ...current, [candidate.row.id]: event.target.checked }))} /><span><b>{candidate.row.label}</b><small>{candidate.row.date} · {money.format(candidate.row.amount)} · déjà saisie : {candidate.existing.label} ({candidate.daysApart === 0 ? "même date" : `${candidate.daysApart} jour(s) d’écart`})</small></span></label>)}</div>}
+              {csvDuplicateCandidates.length > 0 && <div className="csv-duplicate-review" role="region" aria-label="Contrôle des doublons"><strong>{csvDuplicateCandidates.length} doublon(s) possible(s)</strong><p>Ces opérations ressemblent à des dépenses déjà présentes, y compris sur le compte débité lié à la carte. Cochez uniquement celles que vous souhaitez importer malgré tout.</p>{csvDuplicateCandidates.map((candidate) => <label className="duplicate-row" key={candidate.row.id}><input type="checkbox" checked={Boolean(csvDuplicateDecisions[candidate.row.id])} onChange={(event) => setCsvDuplicateDecisions((current) => ({ ...current, [candidate.row.id]: event.target.checked }))} /><span><b>{candidate.row.label}</b><small>{candidate.row.date}{candidate.row.debitDate ? ` · débit ${candidate.row.debitDate}` : ""} · {money.format(candidate.row.amount)} · déjà saisie sur {candidate.matchedAccountName} : {candidate.existing.label} ({candidate.daysApart === 0 ? "même date" : `${candidate.daysApart} jour(s) d’écart`})</small></span></label>)}</div>}
               <div className="import-preview">
                 <strong>{csvRowsToImport.length} nouvelle(s) opération(s) à importer{csvDuplicateCandidates.length ? ` sur ${csvPreview.length} détectée(s)` : " détectée(s)"}</strong>
                 <div className="import-summary-grid">
                   <span>Dépenses <b>{money.format(csvExpenses)}</b></span>
                   <span>Revenus <b>{money.format(csvIncome)}</b></span>
                   <span>Impact total <b>{csvImpact >= 0 ? "+" : "−"} {money.format(Math.abs(csvImpact))}</b></span>
+                  {selectedCsvAccount?.type === "Carte" && <span>Prélèvements <b>{csvHasDebitDates ? `${csvDebitDateCount} date(s)` : csvDebitDate || "à renseigner"}</b></span>}
                 </div>
               </div>
               <div className="import-balance-card">

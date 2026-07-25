@@ -53,6 +53,9 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(app, /smart-budget-demo/);
   assert.match(app, /csvAccountId/);
   assert.match(app, /csvBalanceMode/);
+  assert.match(app, /csvHasDebitDates/);
+  assert.match(app, /Date de débit par défaut si absente du CSV/);
+  assert.match(app, /compte débité lié à la carte/);
   assert.match(app, /Solde après l’import/);
   assert.match(app, /Compte \/ solde/);
   assert.match(app, /loadCsvFile/);

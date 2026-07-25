@@ -49,6 +49,23 @@ test("supports quoted comma-separated exports", () => {
   assert.equal(result.rows[0].type, "expense");
 });
 
+test("reads deferred card debit dates from card exports", () => {
+  const result = parseBankCsv([
+    "Date d'opération;Date de prélèvement;Libellé;Débit;Crédit",
+    "23/07/2026;31/08/2026;EasyPark SARL;-3,64;",
+    "21/07/2026;31/08/2026;DISH;-10,00;",
+  ].join("\n"));
+
+  assert.equal(result.error, "");
+  assert.deepEqual(
+    result.rows.map(({ label, amount, type, date, debitDate }) => ({ label, amount, type, date, debitDate })),
+    [
+      { label: "EasyPark SARL", amount: 3.64, type: "expense", date: "2026-07-23", debitDate: "2026-08-31" },
+      { label: "DISH", amount: 10, type: "expense", date: "2026-07-21", debitDate: "2026-08-31" },
+    ],
+  );
+});
+
 test("does not treat dates or account references as bank amounts", () => {
   const result = parseBankCsv([
     "Date opération;Date de crédit;Libellé;Référence;Débit;Crédit",
