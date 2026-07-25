@@ -359,8 +359,7 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .undo-import-banner { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin: 0 23px 14px; padding: 12px 14px; border: 1px solid #c8ddd0; border-radius: 13px; background: #f4faf5; }
 .undo-import-banner > div { display: grid; gap: 3px; }
 .undo-import-banner span { color: var(--muted); font-size: 11px; }
-.undo-history-panel { margin-top: 18px; padding: 18px 21px; }
-.transactions .undo-history-panel { margin: 0 23px 14px; }
+.undo-history-panel { display: grid; gap: 12px; }
 .undo-history-panel .panel-head { padding: 0; margin-bottom: 12px; }
 .undo-history-count { min-width: 27px; padding: 5px 8px; border-radius: 999px; color: #fff; background: var(--green); text-align: center; font-size: 11px; font-weight: 800; }
 .undo-history-list { display: grid; gap: 8px; }
@@ -615,8 +614,6 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
   .view-actions .btn { flex: 1; }
   .transaction-searchbar { grid-template-columns: 1fr; margin-inline: 16px; }
   .undo-import-banner { align-items: stretch; flex-direction: column; margin-inline: 16px; }
-  .undo-history-panel { padding: 16px; }
-  .transactions .undo-history-panel { margin-inline: 16px; }
   .undo-history-row { grid-template-columns: 1fr; align-items: stretch; }
   .undo-history-row .btn { width: 100%; }
   .accounts-view { grid-template-columns: 1fr; }

@@ -70,6 +70,8 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(app, /transaction-created/);
   assert.match(app, /transaction-deleted/);
   assert.match(app, /renderUndoHistoryPanel/);
+  assert.match(app, /setModal\("undoHistory"\)/);
+  assert.match(app, /Historique des ajouts/);
   assert.match(app, /transactionSearch/);
   assert.match(app, /Solde prévisionnel en fin de période/);
   assert.match(app, /budgetStatus\(plan\.percent\)/);

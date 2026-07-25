@@ -34,7 +34,7 @@ import { auth, db, firebaseReady } from "@/lib/firebase";
 import { budgetStatus, chunkItems, currentLocalMonth, isRecurringPeriodDue } from "@/lib/budget-utils.mjs";
 import { decodeBankCsvFile, parseBankCsv } from "@/lib/csv.mjs";
 
-type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "budgetPlan" | "reset" | "recurring" | null;
+type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "budgetPlan" | "reset" | "recurring" | "undoHistory" | null;
 type TransactionType = "expense" | "income";
 type CsvBalanceMode = "calculate" | "keep" | "custom";
 type TransactionFilter = "all" | "income" | "expense" | "review";
@@ -1916,10 +1916,10 @@ export default function BudgetApp() {
   const editingAccount = editingAccountId ? accounts.find((item) => item.id === editingAccountId) : undefined;
   const editingGoal = editingGoalId ? goals.find((item) => item.id === editingGoalId) : undefined;
 
-  const renderUndoHistoryPanel = (compact = false) => (
-    <section className={`undo-history-panel card ${compact ? "undo-history-panel-compact" : ""}`} aria-label="Dernières modifications annulables">
+  const renderUndoHistoryPanel = () => (
+    <section className="undo-history-panel" aria-label="Dernières modifications annulables">
       <div className="panel-head">
-        <div><h2 className="panel-title">Dernières modifications</h2><p className="muted">Annulez rapidement une dépense ou un revenu ajouté pour test.</p></div>
+        <div><h2 className="panel-title">Historique des ajouts</h2><p className="muted">Annulez rapidement une opération ajoutée, modifiée ou supprimée pour test.</p></div>
         {undoHistory.length > 0 && <span className="undo-history-count">{undoHistory.length}</span>}
       </div>
       {undoHistory.length ? (
@@ -2046,8 +2046,6 @@ export default function BudgetApp() {
           </div>
         </section>
 
-        {renderUndoHistoryPanel(true)}
-
         <section className="analysis-grid" aria-label="Analyse du budget">
           <button className="analysis-card" onClick={() => { setTransactionFilter("review"); setActiveNav("Transactions"); }}><span>À vérifier</span><strong>{reviewCount}</strong><small>Opérations dont la catégorie est incertaine</small></button>
           <article className="analysis-card"><span>Charges récurrentes</span><strong>{money.format(recurringTotal)}</strong><small>Ce mois</small></article>
@@ -2137,7 +2135,7 @@ export default function BudgetApp() {
           <section className="card transactions view-section">
             <div className="panel-head">
               <div><h2 className="panel-title">Toutes les opérations</h2><p className="muted">Dépenses et revenus de la période sélectionnée.</p></div>
-              <div className="view-actions"><button className="btn btn-soft" onClick={openCsvImport}>Importer un CSV</button><button className="btn btn-soft" onClick={() => openRecurringEditor()}>＋ Charge mensuelle</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
+              <div className="view-actions"><button className="btn btn-soft" onClick={openCsvImport}>Importer un CSV</button><button className="btn btn-soft" onClick={() => openRecurringEditor()}>＋ Charge mensuelle</button><button className="btn btn-soft" onClick={() => setModal("undoHistory")}>Historique des ajouts</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
             </div>
             <div className="transaction-filters" role="group" aria-label="Filtrer les opérations">
               {(["all", "expense", "income", "review"] as TransactionFilter[]).map((filter) => <button key={filter} className={transactionFilter === filter ? "active" : ""} onClick={() => setTransactionFilter(filter)}>{filter === "all" ? "Tout" : filter === "expense" ? "Dépenses" : filter === "income" ? "Revenus" : "À vérifier"}</button>)}
@@ -2149,7 +2147,6 @@ export default function BudgetApp() {
               {(transactionSearch || transactionAccountFilter !== "all" || transactionCategoryFilter !== "all") && <button className="btn btn-soft clear-filters" onClick={() => { setTransactionSearch(""); setTransactionAccountFilter("all"); setTransactionCategoryFilter("all"); }}>Effacer</button>}
             </div>
             {lastImport && <div className="undo-import-banner"><div><strong>Dernier import disponible</strong><span>{lastImport.transactionIds.length} opération(s) peuvent encore être retirées.</span></div><button className="btn btn-soft" disabled={isSaving} onClick={() => void undoLastImport()}>Annuler le dernier import</button></div>}
-            {renderUndoHistoryPanel(true)}
             <div className="bulk-actions"><label><input type="checkbox" checked={visibleTransactions.length > 0 && visibleTransactions.every((transaction) => selectedTransactionIds.has(transaction.id))} onChange={toggleAllVisibleTransactions} /> Tout sélectionner</label>{selectedTransactionIds.size > 0 && <><span>{selectedTransactionIds.size} opération(s) sélectionnée(s)</span><select className="field" defaultValue="" onChange={(event) => { void applyBulkCategory(event.target.value); event.currentTarget.value = ""; }} disabled={isSaving}><option value="">Attribuer le même motif…</option>{[...new Map([...operationReasons.expense, ...operationReasons.income].map((reason) => [reason.label, reason])).values()].map((reason) => <option key={`${reason.label}-${reason.category}`} value={reason.label}>{reason.label} · {reason.category}</option>)}</select></>}</div>
             <div className="transaction-list">
               {visibleTransactions.length ? visibleTransactions.map((transaction) => (
@@ -2357,6 +2354,12 @@ export default function BudgetApp() {
             </div>
             <div className="form-actions expense-submit"><button type="button" className="btn btn-soft" onClick={() => { setEditingTransactionId(null); setModal(null); }}>Annuler</button><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingTransaction ? "Enregistrer les modifications" : transactionType === "expense" ? "Enregistrer la dépense" : "Enregistrer le revenu"}</button></div>
           </form>
+        </Modal>
+      )}
+
+      {modal === "undoHistory" && (
+        <Modal title="Historique des ajouts" onClose={() => setModal(null)}>
+          {renderUndoHistoryPanel()}
         </Modal>
       )}
 
