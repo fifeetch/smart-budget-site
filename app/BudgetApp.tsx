@@ -37,6 +37,7 @@ import { decodeBankCsvFile, parseBankCsv } from "@/lib/csv.mjs";
 type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "budgetPlan" | "reset" | "recurring" | "undoHistory" | null;
 type TransactionType = "expense" | "income";
 type CsvBalanceMode = "calculate" | "keep" | "custom";
+type CsvImportKind = "bank" | "deferredCard";
 type TransactionFilter = "all" | "income" | "expense" | "review";
 type BudgetPlanScope = "monthly" | "annual";
 
@@ -378,6 +379,7 @@ export default function BudgetApp() {
   const [csvPreview, setCsvPreview] = useState<ReturnType<typeof parseBankCsv>["rows"]>([]);
   const [csvFileName, setCsvFileName] = useState("");
   const [csvError, setCsvError] = useState("");
+  const [csvImportKind, setCsvImportKind] = useState<CsvImportKind>("bank");
   const [csvAccountId, setCsvAccountId] = useState("");
   const [csvBalanceMode, setCsvBalanceMode] = useState<CsvBalanceMode>("calculate");
   const [csvCustomBalance, setCsvCustomBalance] = useState("");
@@ -784,13 +786,15 @@ export default function BudgetApp() {
   const selectedCsvDebitAccount = selectedCsvAccount?.debitAccountId
     ? visibleAccounts.find((account) => account.id === selectedCsvAccount.debitAccountId)
     : undefined;
+  const csvAccountOptions = visibleAccounts.filter((account) => csvImportKind === "deferredCard" ? account.type === "Carte" : account.type !== "Carte");
+  const today = new Date().toISOString().slice(0, 10);
   const deferredCardSummaries = useMemo(
     () => visibleAccounts.filter((account) => account.type === "Carte").map((account) => {
       const pending = allVisibleTransactions
-        .filter((transaction) => transaction.accountId === account.id && transaction.debitDate)
+        .filter((transaction) => transaction.accountId === account.id && transaction.debitDate && transaction.debitDate >= today)
         .reduce((sum, transaction) => sum + (transaction.type === "income" ? -transaction.amount : transaction.amount), 0);
       const debitDates = allVisibleTransactions
-        .filter((transaction) => transaction.accountId === account.id && transaction.debitDate)
+        .filter((transaction) => transaction.accountId === account.id && transaction.debitDate && transaction.debitDate >= today)
         .map((transaction) => transaction.debitDate as string)
         .sort();
       return {
@@ -800,39 +804,63 @@ export default function BudgetApp() {
         debitAccount: account.debitAccountId ? visibleAccounts.find((item) => item.id === account.debitAccountId) : undefined,
       };
     }),
-    [allVisibleTransactions, visibleAccounts],
+    [allVisibleTransactions, today, visibleAccounts],
   );
+  const deferredByDebitAccount = useMemo(() => {
+    const totals = new Map<string, { pending: number; nextDebitDate?: string }>();
+    deferredCardSummaries.forEach(({ account, pending, nextDebitDate }) => {
+      if (!account.debitAccountId || pending <= 0) return;
+      const current = totals.get(account.debitAccountId) || { pending: 0, nextDebitDate };
+      current.pending += pending;
+      current.nextDebitDate = [current.nextDebitDate, nextDebitDate].filter(Boolean).sort()[0];
+      totals.set(account.debitAccountId, current);
+    });
+    return totals;
+  }, [deferredCardSummaries]);
+  const deferredPendingTotal = [...deferredByDebitAccount.values()].reduce((sum, item) => sum + item.pending, 0);
+  const balanceAfterDeferred = balance - deferredPendingTotal;
   const parsedCsvCustomBalance = Number(csvCustomBalance.replace(/\s/g, "").replace(",", "."));
   const csvCustomBalanceIsValid = csvBalanceMode !== "custom"
     || (csvCustomBalance.trim() !== "" && Number.isFinite(parsedCsvCustomBalance));
   const csvDuplicateCandidates = useMemo<CsvDuplicateCandidate[]>(() => {
     if (!csvAccountId || !csvPreview.length) return [];
     const duplicateAccountIds = new Set([csvAccountId]);
-    if (selectedCsvAccount?.type === "Carte" && selectedCsvAccount.debitAccountId) duplicateAccountIds.add(selectedCsvAccount.debitAccountId);
+    if (csvImportKind === "deferredCard" && selectedCsvAccount?.debitAccountId) duplicateAccountIds.add(selectedCsvAccount.debitAccountId);
+    if (csvImportKind === "bank") {
+      visibleAccounts.filter((account) => account.type === "Carte" && account.debitAccountId === csvAccountId).forEach((account) => duplicateAccountIds.add(account.id));
+    }
     const candidates: CsvDuplicateCandidate[] = [];
     csvPreview.forEach((row, index) => {
       const existing = allVisibleTransactions.find((transaction) => {
         if (!duplicateAccountIds.has(transaction.accountId) || transaction.type !== row.type || Math.abs(transaction.amount - row.amount) > 0.01) return false;
-        const candidateDates = [row.date, row.debitDate].filter(Boolean) as string[];
-        const apart = Math.min(...candidateDates.map((date) => daysBetween(transaction.date, date)));
-        if (apart > 3) return false;
+        const rowDates = [row.date, row.debitDate].filter(Boolean) as string[];
+        const transactionDates = [transaction.date, transaction.debitDate].filter(Boolean) as string[];
+        const apart = Math.min(...rowDates.flatMap((rowDate) => transactionDates.map((transactionDate) => daysBetween(transactionDate, rowDate))));
+        if (apart > (transaction.debitDate || row.debitDate ? 35 : 3)) return false;
         const rowLabel = normalizeMatchLabel(row.label);
         const existingLabel = normalizeMatchLabel(transaction.label);
         return apart === 0 || rowLabel === existingLabel || rowLabel.includes(existingLabel) || existingLabel.includes(rowLabel);
       });
       if (existing) {
-        const matchedDate = [row.date, row.debitDate].filter(Boolean).sort((a, b) => daysBetween(existing.date, a) - daysBetween(existing.date, b))[0] || row.date;
+        const matchedDate = [row.date, row.debitDate].filter(Boolean).sort((a, b) => {
+          const existingDates = [existing.date, existing.debitDate].filter(Boolean) as string[];
+          const apartA = Math.min(...existingDates.map((date) => daysBetween(date, a)));
+          const apartB = Math.min(...existingDates.map((date) => daysBetween(date, b)));
+          return apartA - apartB;
+        })[0] || row.date;
+        const existingDates = [existing.date, existing.debitDate].filter(Boolean) as string[];
+        const matchedApart = Math.min(...existingDates.map((date) => daysBetween(date, matchedDate)));
         candidates.push({
           row: { ...row, id: row.id || `csv-${index}` },
           existing,
-          daysApart: daysBetween(existing.date, matchedDate),
+          daysApart: matchedApart,
           matchedDate,
           matchedAccountName: visibleAccounts.find((account) => account.id === existing.accountId)?.name || "Compte",
         });
       }
     });
     return candidates;
-  }, [allVisibleTransactions, csvAccountId, csvPreview, selectedCsvAccount, visibleAccounts]);
+  }, [allVisibleTransactions, csvAccountId, csvImportKind, csvPreview, selectedCsvAccount, visibleAccounts]);
   const csvDuplicateIds = useMemo(() => new Set(csvDuplicateCandidates.map((candidate) => candidate.row.id)), [csvDuplicateCandidates]);
   const csvRowsToImport = useMemo(() => csvPreview.filter((row) => !csvDuplicateIds.has(row.id) || csvDuplicateDecisions[row.id]), [csvDuplicateDecisions, csvDuplicateIds, csvPreview]);
   const csvHasDebitDates = csvPreview.some((row) => row.debitDate);
@@ -941,7 +969,8 @@ export default function BudgetApp() {
     setCsvPreview([]);
     setCsvFileName("");
     setCsvError("");
-    setCsvAccountId(visibleAccounts[0]?.id || "");
+    setCsvImportKind("bank");
+    setCsvAccountId(visibleAccounts.find((account) => account.type !== "Carte")?.id || visibleAccounts[0]?.id || "");
     setCsvBalanceMode("calculate");
     setCsvCustomBalance("");
     setCsvDebitDate(new Date().toISOString().slice(0, 10));
@@ -953,12 +982,23 @@ export default function BudgetApp() {
     setCsvPreview([]);
     setCsvFileName("");
     setCsvError("");
+    setCsvImportKind("bank");
     setCsvAccountId("");
     setCsvBalanceMode("calculate");
     setCsvCustomBalance("");
     setCsvDebitDate("");
     setCsvDuplicateDecisions({});
     setModal(null);
+  };
+
+  const chooseCsvImportKind = (kind: CsvImportKind) => {
+    const nextAccount = visibleAccounts.find((account) => kind === "deferredCard" ? account.type === "Carte" : account.type !== "Carte");
+    setCsvImportKind(kind);
+    setCsvAccountId(nextAccount?.id || "");
+    setCsvBalanceMode(kind === "deferredCard" ? "keep" : "calculate");
+    setCsvCustomBalance("");
+    setCsvDebitDate(new Date().toISOString().slice(0, 10));
+    setCsvDuplicateDecisions({});
   };
 
   const loadCsvFile = async (file?: File) => {
@@ -1793,7 +1833,11 @@ export default function BudgetApp() {
       setToast("Sélectionnez le compte concerné par ce relevé.");
       return;
     }
-    if (account.type === "Carte" && !csvHasDebitDates && !csvDebitDate) {
+    if (csvImportKind === "deferredCard" && account.type !== "Carte") {
+      setToast("Sélectionnez un compte de type carte pour importer un relevé différé.");
+      return;
+    }
+    if (csvImportKind === "deferredCard" && !csvHasDebitDates && !csvDebitDate) {
       setToast("Indiquez la date à laquelle la carte sera débitée.");
       return;
     }
@@ -1812,9 +1856,10 @@ export default function BudgetApp() {
       setToast("Ce relevé contient plus de 450 nouvelles opérations. Découpez-le en plusieurs fichiers pour garantir un import fiable.");
       return;
     }
-    const nextBalance = csvBalanceMode === "calculate"
+    const effectiveCsvBalanceMode = csvImportKind === "deferredCard" ? "keep" : csvBalanceMode;
+    const nextBalance = effectiveCsvBalanceMode === "calculate"
       ? Number(account.balance || 0) + csvImpact
-      : csvBalanceMode === "custom"
+      : effectiveCsvBalanceMode === "custom"
         ? parsedCsvCustomBalance
         : null;
     if (!user) {
@@ -1825,7 +1870,7 @@ export default function BudgetApp() {
         importBatchId: `demo-import-${importedAt}`,
         originalLabel: row.originalLabel || row.label,
         accountId,
-        ...(selectedCsvAccount?.type === "Carte" ? { debitDate: row.debitDate || csvDebitDate } : {}),
+        ...(csvImportKind === "deferredCard" ? { debitDate: row.debitDate || csvDebitDate } : {}),
         createdBy: "demo",
       }));
       setTransactions((current) => [...rows, ...current]);
@@ -1836,7 +1881,7 @@ export default function BudgetApp() {
         transactionIds: rows.map((row) => row.id),
         accountId,
         impact: csvImpact,
-        balanceMode: csvBalanceMode,
+        balanceMode: effectiveCsvBalanceMode,
         previousBalance: Number(account.balance || 0),
       });
       closeCsvImport();
@@ -1854,14 +1899,14 @@ export default function BudgetApp() {
         void temporaryId;
         const reference = doc(collection(db, "households", householdId, "transactions"));
         importedIds.push(reference.id);
-        batch.set(reference, { ...transaction, importBatchId, originalLabel: transaction.originalLabel || transaction.label, accountId, ...(selectedCsvAccount?.type === "Carte" ? { debitDate: transaction.debitDate || csvDebitDate } : {}), createdBy: user.uid, imported: true, createdAt: Timestamp.now() });
+        batch.set(reference, { ...transaction, importBatchId, originalLabel: transaction.originalLabel || transaction.label, accountId, ...(csvImportKind === "deferredCard" ? { debitDate: transaction.debitDate || csvDebitDate } : {}), createdBy: user.uid, imported: true, createdAt: Timestamp.now() });
       });
-      if (csvBalanceMode === "calculate") {
+      if (effectiveCsvBalanceMode === "calculate") {
         batch.update(doc(db, "households", householdId, "accounts", accountId), {
           balance: increment(csvImpact),
           balanceVerifiedAt: deleteField(),
         });
-      } else if (csvBalanceMode === "custom") {
+      } else if (effectiveCsvBalanceMode === "custom") {
         batch.update(doc(db, "households", householdId, "accounts", accountId), {
           balance: parsedCsvCustomBalance,
           balanceHistory: arrayUnion({ date: new Date().toISOString().slice(0, 10), balance: parsedCsvCustomBalance }),
@@ -1873,7 +1918,7 @@ export default function BudgetApp() {
         transactionIds: importedIds,
         accountId,
         impact: csvImpact,
-        balanceMode: csvBalanceMode,
+        balanceMode: effectiveCsvBalanceMode,
         previousBalance: Number(account.balance || 0),
       });
       closeCsvImport();
@@ -2047,7 +2092,7 @@ export default function BudgetApp() {
         </section>
 
         <section className="summary-grid" aria-label="Résumé du budget">
-          <SummaryCard label="Solde disponible" value={balance} note="Voir le détail des comptes" accent="var(--green)" onClick={() => setActiveNav("Comptes")} />
+          <SummaryCard label="Disponible après cartes" value={balanceAfterDeferred} note={deferredPendingTotal ? `Solde réel ${money.format(balance)} − cartes ${money.format(deferredPendingTotal)}` : "Voir le détail des comptes"} accent="var(--green)" onClick={() => setActiveNav("Comptes")} />
           <SummaryCard label="Revenus ce mois" value={income} note="Voir les revenus enregistrés" accent="var(--mint)" onClick={() => { setTransactionFilter("income"); setActiveNav("Transactions"); }} />
           <SummaryCard label="Dépenses ce mois" value={expenses} note="Voir les dépenses enregistrées" accent="var(--coral)" onClick={() => { setTransactionFilter("expense"); setActiveNav("Transactions"); }} />
         </section>
@@ -2085,13 +2130,16 @@ export default function BudgetApp() {
           <article className="card panel">
             <div className="panel-head"><h2 className="panel-title">Mes comptes</h2><button className="text-button" onClick={() => openAccountEditor()}>＋ Ajouter</button></div>
             <div className="account-list">
-              {visibleAccounts.slice(0, 4).map((account) => (
-                <div className="account-row" key={account.id}>
-                  <span className="account-icon">{account.type === "Épargne" ? "🎯" : account.type === "Carte" ? "💳" : "🏦"}</span>
-                  <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type === "Carte" ? "Carte à débit différé" : account.type}</div>{account.type === "Carte" && account.debitAccountId && <span className="deferred-card-pill">Débit sur {visibleAccounts.find((item) => item.id === account.debitAccountId)?.name || "compte lié"}</span>}{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
-                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><span className={account.balanceVerifiedAt ? "balance-status verified" : "balance-status"}>{balanceVerificationLabel(account.balanceVerifiedAt)}</span><button className="mini-action" onClick={() => openAccountEditor(account)}>Compte / solde</button>{account.balanceHistory?.slice(-3).map((entry) => <small className="muted" key={`${account.id}-${entry.date}`}>{entry.date} · {money.format(entry.balance)}</small>)}</div>
-                </div>
-              ))}
+              {visibleAccounts.slice(0, 4).map((account) => {
+                const deferred = deferredByDebitAccount.get(account.id);
+                return (
+                  <div className={`account-row ${deferred ? "account-row-deferred" : ""}`} key={account.id}>
+                    <span className="account-icon">{account.type === "Épargne" ? "🎯" : account.type === "Carte" ? "💳" : "🏦"}</span>
+                    <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type === "Carte" ? "Carte à débit différé" : account.type}</div>{account.type === "Carte" && account.debitAccountId && <span className="deferred-card-pill">Débit sur {visibleAccounts.find((item) => item.id === account.debitAccountId)?.name || "compte lié"}</span>}{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
+                    <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><span className={account.balanceVerifiedAt ? "balance-status verified" : "balance-status"}>{balanceVerificationLabel(account.balanceVerifiedAt)}</span>{deferred && <div className="account-deferred-breakdown"><span>Carte à venir : −{money.format(deferred.pending)}</span><strong>Après débit : {money.format(Number(account.balance || 0) - deferred.pending)}</strong>{deferred.nextDebitDate && <small>Prochain débit : {fullDisplayDate.format(new Date(`${deferred.nextDebitDate}T12:00:00`))}</small>}</div>}<button className="mini-action" onClick={() => openAccountEditor(account)}>Mettre à jour le solde réel</button>{account.balanceHistory?.slice(-3).map((entry) => <small className="muted" key={`${account.id}-${entry.date}`}>{entry.date} · {money.format(entry.balance)}</small>)}</div>
+                  </div>
+                );
+              })}
             </div>
             {deferredCardSummaries.map(({ account, pending, nextDebitDate, debitAccount }) => <div className="deferred-card-summary" key={`deferred-${account.id}`}><div><strong>💳 Encours carte</strong><span className="muted">{account.name}{debitAccount ? ` · débité sur ${debitAccount.name}` : ""}</span></div><div className="deferred-card-summary-side"><b>{money.format(pending)}</b><small>{nextDebitDate ? `Prochain débit : ${fullDisplayDate.format(new Date(`${nextDebitDate}T12:00:00`))}` : "Aucune date de débit renseignée"}</small></div></div>)}
           </article>
@@ -2117,9 +2165,9 @@ export default function BudgetApp() {
           </div>
           <div className="transaction-list">
             {visibleTransactions.length ? visibleTransactions.slice(0, 7).map((transaction) => (
-              <div className="transaction-row transaction-row-clickable" key={transaction.id} onClick={() => openTransactionEditor(transaction)}>
+              <div className={`transaction-row transaction-row-clickable ${transaction.debitDate ? "transaction-row-deferred" : ""}`} key={transaction.id} onClick={() => openTransactionEditor(transaction)}>
                 <span className="transaction-icon">{categoryIcons[transaction.category] || "•"}</span>
-                <div><div className="transaction-label">{transaction.label}</div><div className="muted">{visibleAccounts.find((account) => account.id === transaction.accountId)?.name || "Compte"}</div>{transaction.debitDate && <span className="deferred-debit-badge">💳 Débit le {fullDisplayDate.format(new Date(`${transaction.debitDate}T12:00:00`))}</span>}{transaction.confidence != null && transaction.confidence < 0.8 && <span className="confidence-badge">À vérifier</span>}</div>
+                <div><div className="transaction-label">{transaction.label}</div><div className="muted">{visibleAccounts.find((account) => account.id === transaction.accountId)?.name || "Compte"}</div>{transaction.debitDate && <><span className="deferred-card-badge">Carte différée</span><span className="deferred-debit-badge">💳 {transaction.debitDate >= today ? "Débit le" : "Débité le"} {fullDisplayDate.format(new Date(`${transaction.debitDate}T12:00:00`))}</span></>}{transaction.confidence != null && transaction.confidence < 0.8 && <span className="confidence-badge">À vérifier</span>}</div>
                 <div className="transaction-category">{transaction.category}</div>
                 <div className="transaction-date">{displayDate.format(new Date(transaction.date))}</div>
                 <div className="transaction-end"><div className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : "−"} {money.format(transaction.amount)}</div><div className="row-actions"><button onClick={(event) => { event.stopPropagation(); openTransactionEditor(transaction); }}>Modifier</button><button className="danger-link" onClick={(event) => { event.stopPropagation(); void deleteTransaction(transaction); }}>Supprimer</button></div></div>
@@ -2166,9 +2214,9 @@ export default function BudgetApp() {
             <div className="bulk-actions"><label><input type="checkbox" checked={visibleTransactions.length > 0 && visibleTransactions.every((transaction) => selectedTransactionIds.has(transaction.id))} onChange={toggleAllVisibleTransactions} /> Tout sélectionner</label>{selectedTransactionIds.size > 0 && <><span>{selectedTransactionIds.size} opération(s) sélectionnée(s)</span><select className="field" defaultValue="" onChange={(event) => { void applyBulkCategory(event.target.value); event.currentTarget.value = ""; }} disabled={isSaving}><option value="">Attribuer le même motif…</option>{[...new Map([...operationReasons.expense, ...operationReasons.income].map((reason) => [reason.label, reason])).values()].map((reason) => <option key={`${reason.label}-${reason.category}`} value={reason.label}>{reason.label} · {reason.category}</option>)}</select></>}</div>
             <div className="transaction-list">
               {visibleTransactions.length ? visibleTransactions.map((transaction) => (
-                <div className="transaction-row transaction-row-clickable" key={transaction.id} onClick={() => openTransactionEditor(transaction)}>
+                <div className={`transaction-row transaction-row-clickable ${transaction.debitDate ? "transaction-row-deferred" : ""}`} key={transaction.id} onClick={() => openTransactionEditor(transaction)}>
                   <div className="transaction-select-cell"><input type="checkbox" checked={selectedTransactionIds.has(transaction.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleTransactionSelection(transaction.id)} aria-label={`Sélectionner ${transaction.label}`} /><span className="transaction-icon">{categoryIcons[transaction.category] || "•"}</span></div>
-                  <div><div className="transaction-label">{transaction.label}</div><div className="muted">{visibleAccounts.find((account) => account.id === transaction.accountId)?.name || "Compte"}</div>{transaction.debitDate && <span className="deferred-debit-badge">💳 Débit le {fullDisplayDate.format(new Date(`${transaction.debitDate}T12:00:00`))}</span>}{transaction.confidence != null && transaction.confidence < 0.8 && <span className="confidence-badge">À vérifier</span>}</div>
+                  <div><div className="transaction-label">{transaction.label}</div><div className="muted">{visibleAccounts.find((account) => account.id === transaction.accountId)?.name || "Compte"}</div>{transaction.debitDate && <><span className="deferred-card-badge">Carte différée</span><span className="deferred-debit-badge">💳 {transaction.debitDate >= today ? "Débit le" : "Débité le"} {fullDisplayDate.format(new Date(`${transaction.debitDate}T12:00:00`))}</span></>}{transaction.confidence != null && transaction.confidence < 0.8 && <span className="confidence-badge">À vérifier</span>}</div>
                   <div className="transaction-category">{transaction.category}</div>
                   <div className="transaction-date">{displayDate.format(new Date(transaction.date))}</div>
                   <div className="transaction-end"><div className={`transaction-amount ${transaction.type}`}>{transaction.type === "income" ? "+" : "−"} {money.format(transaction.amount)}</div><div className="row-actions"><button onClick={(event) => { event.stopPropagation(); openTransactionEditor(transaction); }}>Modifier</button><button className="danger-link" onClick={(event) => { event.stopPropagation(); void deleteTransaction(transaction); }}>Supprimer</button></div></div>
@@ -2235,13 +2283,16 @@ export default function BudgetApp() {
               <button className="btn btn-primary" onClick={() => openAccountEditor()}>＋ Ajouter un compte</button>
             </div>
             <div className="account-list accounts-view">
-              {visibleAccounts.map((account) => (
-                <div className="account-row" key={account.id}>
-                  <span className="account-icon">{account.type === "Épargne" ? "🎯" : account.type === "Carte" ? "💳" : "🏦"}</span>
-                  <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type === "Carte" ? "Carte à débit différé" : account.type}</div>{account.type === "Carte" && account.debitAccountId && <span className="deferred-card-pill">Débit sur {visibleAccounts.find((item) => item.id === account.debitAccountId)?.name || "compte lié"}</span>}{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
-                  <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><span className={account.balanceVerifiedAt ? "balance-status verified" : "balance-status"}>{balanceVerificationLabel(account.balanceVerifiedAt)}</span><button className="mini-action" onClick={() => openAccountEditor(account)}>Compte / solde</button></div>
-                </div>
-              ))}
+              {visibleAccounts.map((account) => {
+                const deferred = deferredByDebitAccount.get(account.id);
+                return (
+                  <div className={`account-row ${deferred ? "account-row-deferred" : ""}`} key={account.id}>
+                    <span className="account-icon">{account.type === "Épargne" ? "🎯" : account.type === "Carte" ? "💳" : "🏦"}</span>
+                    <div><div className="account-name">{account.name}</div><div className="account-meta">{account.type === "Carte" ? "Carte à débit différé" : account.type}</div>{account.type === "Carte" && account.debitAccountId && <span className="deferred-card-pill">Débit sur {visibleAccounts.find((item) => item.id === account.debitAccountId)?.name || "compte lié"}</span>}{account.visibility === "private" && <span className="privacy-pill">● privé</span>}</div>
+                    <div className="account-side"><div className="account-amount">{money.format(Number(account.balance || 0))}</div><span className={account.balanceVerifiedAt ? "balance-status verified" : "balance-status"}>{balanceVerificationLabel(account.balanceVerifiedAt)}</span>{deferred && <div className="account-deferred-breakdown"><span>Carte à venir : −{money.format(deferred.pending)}</span><strong>Après débit : {money.format(Number(account.balance || 0) - deferred.pending)}</strong>{deferred.nextDebitDate && <small>Prochain débit : {fullDisplayDate.format(new Date(`${deferred.nextDebitDate}T12:00:00`))}</small>}</div>}<button className="mini-action" onClick={() => openAccountEditor(account)}>Mettre à jour le solde réel</button></div>
+                  </div>
+                );
+              })}
             </div>
           </section>
         )}
@@ -2380,17 +2431,17 @@ export default function BudgetApp() {
       )}
 
       {modal === "account" && (
-        <Modal title={editingAccount ? "Modifier le compte et son solde" : "Ajouter un compte"} onClose={() => { setEditingAccountId(null); setModal(null); }}>
+        <Modal title={editingAccount ? "Mettre à jour le solde réel" : "Ajouter un compte"} onClose={() => { setEditingAccountId(null); setModal(null); }}>
           <form onSubmit={addAccount}>
             <div className="form-grid">
               <label className="label wide">Nom du compte<input className="field" name="name" placeholder="Ex. Compte joint" defaultValue={editingAccount?.name} required /></label>
               <label className="label">Type<select className="field" name="type" value={accountTypeDraft} onChange={(event) => setAccountTypeDraft(event.target.value)}><option>Courant</option><option>Épargne</option><option>Carte</option><option>Espèces</option></select></label>
               {accountTypeDraft === "Carte" && <label className="label wide">Compte débité à la fin du mois<select className="field" name="debitAccountId" defaultValue={editingAccount?.debitAccountId || ""}><option value="">Sélectionner le compte débité</option>{visibleAccounts.filter((account) => account.id !== editingAccount?.id).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select><small className="field-help">Les achats restent sur la carte jusqu’à la date de débit.</small></label>}
-              <label className="label">Solde actuel<input className="field" name="balance" inputMode="decimal" defaultValue={editingAccount?.balance ?? 0} /></label>
+              <label className="label">Solde bancaire réel<input className="field" name="balance" inputMode="decimal" defaultValue={editingAccount?.balance ?? 0} /></label>
               <label className="label">Date du solde<input className="field" type="date" name="balanceDate" defaultValue={new Date().toISOString().slice(0, 10)} /></label>
               <label className="label wide">Visibilité<select className="field" name="visibility" defaultValue={editingAccount?.visibility || "shared"}><option value="shared">Partagé avec le foyer</option><option value="private">Personnel — moi uniquement</option></select></label>
             </div>
-            <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingAccount ? "Enregistrer le compte" : "Créer le compte"}</button></div>
+            <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingAccount ? "Enregistrer le solde réel" : "Créer le compte"}</button></div>
           </form>
         </Modal>
       )}
@@ -2464,20 +2515,24 @@ export default function BudgetApp() {
       {modal === "csv" && (
         <Modal title="Importer un relevé bancaire" onClose={closeCsvImport}>
           <div className="import-settings">
+            <div className="segmented import-kind-switch" role="group" aria-label="Type de relevé">
+              <button type="button" className={csvImportKind === "bank" ? "active" : ""} onClick={() => chooseCsvImportKind("bank")}>Relevé de compte classique</button>
+              <button type="button" className={csvImportKind === "deferredCard" ? "active" : ""} onClick={() => chooseCsvImportKind("deferredCard")}>Relevé carte différée</button>
+            </div>
             <label className="label">
-              Compte concerné par le relevé
+              {csvImportKind === "deferredCard" ? "Carte concernée par le relevé" : "Compte concerné par le relevé"}
               <select className="field" value={csvAccountId} onChange={(event) => {
                 setCsvAccountId(event.target.value);
                 setCsvCustomBalance("");
-                const account = visibleAccounts.find((item) => item.id === event.target.value);
-                setCsvBalanceMode(account?.type === "Carte" ? "keep" : "calculate");
+                setCsvBalanceMode(csvImportKind === "deferredCard" ? "keep" : "calculate");
               }} required>
                 <option value="">Sélectionner un compte</option>
-                {visibleAccounts.map((account) => <option key={account.id} value={account.id}>{account.name} — {money.format(Number(account.balance || 0))}</option>)}
+                {csvAccountOptions.map((account) => <option key={account.id} value={account.id}>{account.name} — {money.format(Number(account.balance || 0))}</option>)}
               </select>
             </label>
+            {csvImportKind === "deferredCard" && !csvAccountOptions.length && <div className="csv-error"><strong>Aucune carte configurée</strong><span>Ajoutez ou modifiez un compte en type « Carte », puis associez-lui le compte débité.</span></div>}
           </div>
-          {selectedCsvAccount?.type === "Carte" && <div className="import-balance-card card-import-note"><strong>💳 Carte à débit différé</strong><p className="muted">Les opérations seront rattachées à la carte. Le compte débité ne sera pas modifié avant le prélèvement réel.</p>{selectedCsvDebitAccount ? <p className="deferred-link-note">Compte débité : <strong>{selectedCsvDebitAccount.name}</strong></p> : <p className="deferred-link-warning">Associez un compte débité dans « Comptes » pour suivre automatiquement l’encours.</p>}{csvHasDebitDates && <p className="deferred-link-note">{csvDebitDateCount} date(s) de prélèvement détectée(s) dans le fichier.</p>}<label className="label">{csvHasDebitDates ? "Date de débit par défaut si absente du CSV" : "Date de débit prévue"}<input className="field" type="date" value={csvDebitDate} onChange={(event) => setCsvDebitDate(event.target.value)} required={!csvHasDebitDates} /></label></div>}
+          {csvImportKind === "deferredCard" && selectedCsvAccount && <div className="import-balance-card card-import-note"><strong>💳 Carte à débit différé</strong><p className="muted">Les opérations seront rattachées à la carte. Le compte débité ne sera pas modifié avant le prélèvement réel.</p>{selectedCsvDebitAccount ? <p className="deferred-link-note">Compte débité : <strong>{selectedCsvDebitAccount.name}</strong></p> : <p className="deferred-link-warning">Associez un compte débité dans « Comptes » pour suivre automatiquement l’encours.</p>}{csvHasDebitDates && <p className="deferred-link-note">{csvDebitDateCount} date(s) de prélèvement détectée(s) dans le fichier.</p>}<label className="label">{csvHasDebitDates ? "Date de débit par défaut si absente du CSV" : "Date de débit prévue"}<input className="field" type="date" value={csvDebitDate} onChange={(event) => setCsvDebitDate(event.target.value)} required={!csvHasDebitDates} /></label></div>}
           <div
             className={`drop-zone ${csvError ? "drop-zone-error" : csvFileName ? "drop-zone-ready" : ""}`}
             onDragOver={(event) => event.preventDefault()}
@@ -2501,18 +2556,22 @@ export default function BudgetApp() {
                   <span>Dépenses <b>{money.format(csvExpenses)}</b></span>
                   <span>Revenus <b>{money.format(csvIncome)}</b></span>
                   <span>Impact total <b>{csvImpact >= 0 ? "+" : "−"} {money.format(Math.abs(csvImpact))}</b></span>
-                  {selectedCsvAccount?.type === "Carte" && <span>Prélèvements <b>{csvHasDebitDates ? `${csvDebitDateCount} date(s)` : csvDebitDate || "à renseigner"}</b></span>}
+                  {csvImportKind === "deferredCard" && <span>Prélèvements <b>{csvHasDebitDates ? `${csvDebitDateCount} date(s)` : csvDebitDate || "à renseigner"}</b></span>}
                 </div>
               </div>
               <div className="import-balance-card">
-                <label className="label">
-                  Solde après l’import
-                  <select className="field" value={csvBalanceMode} onChange={(event) => setCsvBalanceMode(event.target.value as CsvBalanceMode)}>
-                    <option value="calculate">Recalculer automatiquement avec les opérations</option>
-                    <option value="keep">Conserver le solde actuel</option>
-                    <option value="custom">Définir le solde manuellement</option>
-                  </select>
-                </label>
+                {csvImportKind === "deferredCard" ? (
+                  <p>Le solde bancaire reste à <b>{money.format(Number(selectedCsvAccount?.balance || 0))}</b>. Les achats alimentent seulement l’encours carte.</p>
+                ) : (
+                  <label className="label">
+                    Solde après l’import
+                    <select className="field" value={csvBalanceMode} onChange={(event) => setCsvBalanceMode(event.target.value as CsvBalanceMode)}>
+                      <option value="calculate">Recalculer automatiquement avec les opérations</option>
+                      <option value="keep">Conserver le solde actuel</option>
+                      <option value="custom">Définir le solde manuellement</option>
+                    </select>
+                  </label>
+                )}
                 {csvBalanceMode === "calculate" && selectedCsvAccount && (
                   <p>Solde estimé de <strong>{selectedCsvAccount.name}</strong> : <b>{money.format(csvProjectedBalance)}</b></p>
                 )}
