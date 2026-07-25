@@ -71,6 +71,8 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(app, /budgetStatus\(plan\.percent\)/);
   assert.match(app, /Alertes budgétaires/);
   assert.match(app, /Prévision du solde en fin de période/);
+  assert.match(app, /Marge après dépassements/);
+  assert.match(app, /livingReserveUsed/);
   assert.match(layout, /Smart Budget/);
   const rules = await readFile(new URL("../firestore.rules", import.meta.url), "utf8");
   assert.match(rules, /joinsInvitedHousehold/);
