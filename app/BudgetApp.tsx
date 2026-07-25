@@ -117,6 +117,45 @@ type LastImport = {
   previousBalance: number;
 };
 
+type UndoHistoryItem =
+  | { id: string; action: "transaction-created"; at: string; transaction: Transaction }
+  | { id: string; action: "transaction-updated"; at: string; before: Transaction; after: Transaction }
+  | { id: string; action: "transaction-deleted"; at: string; transaction: Transaction };
+
+function transactionImpact(item: Pick<Transaction, "type" | "amount">) {
+  return item.type === "income" ? item.amount : -item.amount;
+}
+
+function transactionPayload(transaction: Transaction, fallbackCreatedBy: string) {
+  return {
+    label: transaction.label,
+    originalLabel: transaction.originalLabel,
+    amount: transaction.amount,
+    type: transaction.type,
+    category: transaction.category,
+    reason: transaction.reason,
+    accountId: transaction.accountId,
+    date: transaction.date,
+    createdBy: transaction.createdBy || fallbackCreatedBy,
+    ...(transaction.debitDate ? { debitDate: transaction.debitDate } : {}),
+    ...(transaction.recurringId ? { recurringId: transaction.recurringId } : {}),
+    ...(transaction.importBatchId ? { importBatchId: transaction.importBatchId } : {}),
+    ...(transaction.confidence != null ? { confidence: transaction.confidence } : {}),
+    ...(transaction.categoryReason ? { categoryReason: transaction.categoryReason } : {}),
+  };
+}
+
+function undoHistoryTitle(item: UndoHistoryItem) {
+  if (item.action === "transaction-created") return `Ajout : ${item.transaction.label}`;
+  if (item.action === "transaction-updated") return `Modification : ${item.after.label}`;
+  return `Suppression : ${item.transaction.label}`;
+}
+
+function undoHistoryAmount(item: UndoHistoryItem) {
+  const transaction = item.action === "transaction-updated" ? item.after : item.transaction;
+  return `${transaction.type === "income" ? "+" : "-"} ${money.format(transaction.amount)}`;
+}
+
 function normalizeMatchLabel(value: string) {
   return String(value || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
 }
@@ -364,6 +403,7 @@ export default function BudgetApp() {
   const [transactionCategoryFilter, setTransactionCategoryFilter] = useState("all");
   const [selectedTransactionIds, setSelectedTransactionIds] = useState<Set<string>>(new Set());
   const [lastImport, setLastImport] = useState<LastImport | null>(null);
+  const [undoHistory, setUndoHistory] = useState<UndoHistoryItem[]>([]);
   const [monthlyBudget, setMonthlyBudget] = useState(2000);
   const [memberEmails, setMemberEmails] = useState<string[]>([]);
   const [authResolved, setAuthResolved] = useState(() => !auth);
@@ -989,6 +1029,86 @@ export default function BudgetApp() {
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [chooseOperationType, modal]);
 
+  const addUndoHistoryItem = useCallback((item: Omit<UndoHistoryItem, "id" | "at">) => {
+    const now = Date.now();
+    setUndoHistory((current) => [
+      { ...item, id: `undo-${now}-${Math.random().toString(36).slice(2, 8)}`, at: new Date(now).toISOString() } as UndoHistoryItem,
+      ...current,
+    ].slice(0, 5));
+  }, []);
+
+  const undoHistoryItem = async (item: UndoHistoryItem) => {
+    const removeFromHistory = () => setUndoHistory((current) => current.filter((entry) => entry.id !== item.id));
+    const restoreLocalBalance = (before?: Transaction, after?: Transaction) => {
+      setAccounts((current) => current.map((account) => {
+        let delta = 0;
+        if (after?.accountId === account.id) delta -= transactionImpact(after);
+        if (before?.accountId === account.id) delta += transactionImpact(before);
+        return delta ? { ...account, balance: account.balance + delta } : account;
+      }));
+    };
+
+    if (!user) {
+      if (item.action === "transaction-created") {
+        setTransactions((current) => current.filter((transaction) => transaction.id !== item.transaction.id));
+        restoreLocalBalance(undefined, item.transaction);
+      } else if (item.action === "transaction-deleted") {
+        setTransactions((current) => [item.transaction, ...current.filter((transaction) => transaction.id !== item.transaction.id)].sort((a, b) => b.date.localeCompare(a.date)));
+        restoreLocalBalance(item.transaction);
+      } else {
+        setTransactions((current) => current.map((transaction) => transaction.id === item.after.id ? item.before : transaction));
+        restoreLocalBalance(item.before, item.after);
+      }
+      removeFromHistory();
+      setToast("Modification annulée.");
+      return;
+    }
+
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      const batch = writeBatch(db);
+      if (item.action === "transaction-created") {
+        batch.delete(doc(db, "households", householdId, "transactions", item.transaction.id));
+        batch.update(doc(db, "households", householdId, "accounts", item.transaction.accountId), {
+          balance: increment(-transactionImpact(item.transaction)),
+          balanceVerifiedAt: deleteField(),
+        });
+      } else if (item.action === "transaction-deleted") {
+        batch.set(doc(db, "households", householdId, "transactions", item.transaction.id), transactionPayload(item.transaction, user.uid));
+        batch.update(doc(db, "households", householdId, "accounts", item.transaction.accountId), {
+          balance: increment(transactionImpact(item.transaction)),
+          balanceVerifiedAt: deleteField(),
+        });
+      } else {
+        batch.set(doc(db, "households", householdId, "transactions", item.before.id), transactionPayload(item.before, user.uid));
+        if (item.before.accountId === item.after.accountId) {
+          batch.update(doc(db, "households", householdId, "accounts", item.before.accountId), {
+            balance: increment(transactionImpact(item.before) - transactionImpact(item.after)),
+            balanceVerifiedAt: deleteField(),
+          });
+        } else {
+          batch.update(doc(db, "households", householdId, "accounts", item.after.accountId), {
+            balance: increment(-transactionImpact(item.after)),
+            balanceVerifiedAt: deleteField(),
+          });
+          batch.update(doc(db, "households", householdId, "accounts", item.before.accountId), {
+            balance: increment(transactionImpact(item.before)),
+            balanceVerifiedAt: deleteField(),
+          });
+        }
+      }
+      await batch.commit();
+      removeFromHistory();
+      setToast("Modification annulée.");
+    } catch (error) {
+      console.error("Annulation impossible", error);
+      setToast("Cette modification n’a pas pu être annulée.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleAuth = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!auth || !db) return;
@@ -1087,6 +1207,9 @@ export default function BudgetApp() {
       setSelectedReason(operationReasons[transactionType][0].label);
       setCustomReason("");
       setOperationPerson("");
+      addUndoHistoryItem(previous
+        ? { action: "transaction-updated", before: previous, after: transaction }
+        : { action: "transaction-created", transaction });
       setToast(previous ? "Opération modifiée en mode découverte." : "Opération ajoutée en mode découverte.");
       return;
     }
@@ -1133,12 +1256,16 @@ export default function BudgetApp() {
           balanceVerifiedAt: deleteField(),
         });
       }
+      const savedTransaction = previous ? transaction : { ...transaction, id: reference.id };
       await batch.commit();
       setModal(null);
       setEditingTransactionId(null);
       setSelectedReason(operationReasons[transactionType][0].label);
       setCustomReason("");
       setOperationPerson("");
+      addUndoHistoryItem(previous
+        ? { action: "transaction-updated", before: previous, after: savedTransaction }
+        : { action: "transaction-created", transaction: savedTransaction });
       setToast(previous ? "Opération modifiée." : "Mouvement ajouté au budget.");
     } catch (error) {
       console.error("Enregistrement de l’opération impossible", error);
@@ -1154,6 +1281,7 @@ export default function BudgetApp() {
     if (!user) {
       setTransactions((current) => current.filter((item) => item.id !== transaction.id));
       setAccounts((current) => current.map((account) => account.id === transaction.accountId ? { ...account, balance: account.balance + reversal } : account));
+      addUndoHistoryItem({ action: "transaction-deleted", transaction });
       setToast("Opération supprimée.");
       return;
     }
@@ -1167,6 +1295,7 @@ export default function BudgetApp() {
         balanceVerifiedAt: deleteField(),
       });
       await batch.commit();
+      addUndoHistoryItem({ action: "transaction-deleted", transaction });
       setToast("Opération supprimée et solde recalculé.");
     } catch (error) {
       console.error("Suppression impossible", error);
@@ -1787,6 +1916,30 @@ export default function BudgetApp() {
   const editingAccount = editingAccountId ? accounts.find((item) => item.id === editingAccountId) : undefined;
   const editingGoal = editingGoalId ? goals.find((item) => item.id === editingGoalId) : undefined;
 
+  const renderUndoHistoryPanel = (compact = false) => (
+    <section className={`undo-history-panel card ${compact ? "undo-history-panel-compact" : ""}`} aria-label="Dernières modifications annulables">
+      <div className="panel-head">
+        <div><h2 className="panel-title">Dernières modifications</h2><p className="muted">Annulez rapidement une dépense ou un revenu ajouté pour test.</p></div>
+        {undoHistory.length > 0 && <span className="undo-history-count">{undoHistory.length}</span>}
+      </div>
+      {undoHistory.length ? (
+        <div className="undo-history-list">
+          {undoHistory.map((item) => (
+            <div className="undo-history-row" key={item.id}>
+              <div>
+                <strong>{undoHistoryTitle(item)}</strong>
+                <span>{undoHistoryAmount(item)} · {new Date(item.at).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>
+              </div>
+              <button className="btn btn-soft" disabled={isSaving} onClick={() => void undoHistoryItem(item)}>Annuler</button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="empty-state undo-history-empty">Aucune modification annulable pour cette session.</div>
+      )}
+    </section>
+  );
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -1893,6 +2046,8 @@ export default function BudgetApp() {
           </div>
         </section>
 
+        {renderUndoHistoryPanel(true)}
+
         <section className="analysis-grid" aria-label="Analyse du budget">
           <button className="analysis-card" onClick={() => { setTransactionFilter("review"); setActiveNav("Transactions"); }}><span>À vérifier</span><strong>{reviewCount}</strong><small>Opérations dont la catégorie est incertaine</small></button>
           <article className="analysis-card"><span>Charges récurrentes</span><strong>{money.format(recurringTotal)}</strong><small>Ce mois</small></article>
@@ -1994,6 +2149,7 @@ export default function BudgetApp() {
               {(transactionSearch || transactionAccountFilter !== "all" || transactionCategoryFilter !== "all") && <button className="btn btn-soft clear-filters" onClick={() => { setTransactionSearch(""); setTransactionAccountFilter("all"); setTransactionCategoryFilter("all"); }}>Effacer</button>}
             </div>
             {lastImport && <div className="undo-import-banner"><div><strong>Dernier import disponible</strong><span>{lastImport.transactionIds.length} opération(s) peuvent encore être retirées.</span></div><button className="btn btn-soft" disabled={isSaving} onClick={() => void undoLastImport()}>Annuler le dernier import</button></div>}
+            {renderUndoHistoryPanel(true)}
             <div className="bulk-actions"><label><input type="checkbox" checked={visibleTransactions.length > 0 && visibleTransactions.every((transaction) => selectedTransactionIds.has(transaction.id))} onChange={toggleAllVisibleTransactions} /> Tout sélectionner</label>{selectedTransactionIds.size > 0 && <><span>{selectedTransactionIds.size} opération(s) sélectionnée(s)</span><select className="field" defaultValue="" onChange={(event) => { void applyBulkCategory(event.target.value); event.currentTarget.value = ""; }} disabled={isSaving}><option value="">Attribuer le même motif…</option>{[...new Map([...operationReasons.expense, ...operationReasons.income].map((reason) => [reason.label, reason])).values()].map((reason) => <option key={`${reason.label}-${reason.category}`} value={reason.label}>{reason.label} · {reason.category}</option>)}</select></>}</div>
             <div className="transaction-list">
               {visibleTransactions.length ? visibleTransactions.map((transaction) => (

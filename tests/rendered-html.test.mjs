@@ -66,6 +66,10 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(app, /rowsToImport\.length > 450/);
   assert.match(app, /sendPasswordResetEmail/);
   assert.match(app, /undoLastImport/);
+  assert.match(app, /undoHistoryItem/);
+  assert.match(app, /transaction-created/);
+  assert.match(app, /transaction-deleted/);
+  assert.match(app, /renderUndoHistoryPanel/);
   assert.match(app, /transactionSearch/);
   assert.match(app, /Solde prévisionnel en fin de période/);
   assert.match(app, /budgetStatus\(plan\.percent\)/);
@@ -85,6 +89,8 @@ test("keeps the requested budget capabilities in the product source", async () =
   assert.match(css, /\.budget-tile\.budget-warning/);
   assert.match(css, /\.budget-tile\.budget-over/);
   assert.match(css, /\.budget-alert-panel/);
+  assert.match(css, /\.undo-history-panel/);
+  assert.match(css, /\.undo-history-row/);
   assert.match(css, /--danger-soft/);
   assert.match(css, /\.cash-forecast/);
 });
