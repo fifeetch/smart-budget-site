@@ -66,6 +66,24 @@ test("reads deferred card debit dates from card exports", () => {
   );
 });
 
+test("reads headerless deferred card exports from spreadsheet copies", () => {
+  const result = parseBankCsv([
+    "23/07/2026;31/08/2026;EasyPark SARL;-3,64;",
+    "23/07/2026;31/08/2026;SUPERQUINQUIN;-21,88;",
+    "21/07/2026;31/08/2026;DISH;-10;",
+  ].join("\n"));
+
+  assert.equal(result.error, "");
+  assert.deepEqual(
+    result.rows.map(({ label, amount, type, date, debitDate }) => ({ label, amount, type, date, debitDate })),
+    [
+      { label: "EasyPark SARL", amount: 3.64, type: "expense", date: "2026-07-23", debitDate: "2026-08-31" },
+      { label: "SUPERQUINQUIN", amount: 21.88, type: "expense", date: "2026-07-23", debitDate: "2026-08-31" },
+      { label: "DISH", amount: 10, type: "expense", date: "2026-07-21", debitDate: "2026-08-31" },
+    ],
+  );
+});
+
 test("does not treat dates or account references as bank amounts", () => {
   const result = parseBankCsv([
     "Date opération;Date de crédit;Libellé;Référence;Débit;Crédit",
