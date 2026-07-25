@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chunkItems, currentLocalMonth, isRecurringPeriodDue } from "../lib/budget-utils.mjs";
+import { budgetStatus, chunkItems, currentLocalMonth, isRecurringPeriodDue } from "../lib/budget-utils.mjs";
 
 test("uses the local calendar month instead of a fixed period", () => {
   assert.equal(currentLocalMonth(new Date(2027, 0, 15, 23, 30)), "2027-01");
@@ -18,4 +18,11 @@ test("splits large Firestore jobs below the batch limit", () => {
   const chunks = chunkItems(Array.from({ length: 901 }, (_, index) => index));
   assert.deepEqual(chunks.map((chunk) => chunk.length), [400, 400, 101]);
   assert.throws(() => chunkItems([1], 0), RangeError);
+});
+
+test("uses clear budget thresholds from 75 percent", () => {
+  assert.equal(budgetStatus(74), "budget-safe");
+  assert.equal(budgetStatus(75), "budget-warning");
+  assert.equal(budgetStatus(100), "budget-warning");
+  assert.equal(budgetStatus(101), "budget-over");
 });
