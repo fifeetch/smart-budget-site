@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { headers } from "next/headers";
 import "./globals.css";
@@ -12,6 +12,13 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
 });
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: "#174f3d",
+};
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -30,9 +37,17 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title,
     description,
+    applicationName: "Smart Budget",
+    manifest: "/manifest.webmanifest",
     icons: {
       icon: "/favicon.svg",
       shortcut: "/favicon.svg",
+      apple: "/apple-touch-icon.png",
+    },
+    appleWebApp: {
+      capable: true,
+      title: "Smart Budget",
+      statusBarStyle: "black-translucent",
     },
     openGraph: {
       title,

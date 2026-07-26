@@ -46,6 +46,8 @@ let html = await response.text();
 html = html
   .replaceAll("/assets/", `${basePath}/assets/`)
   .replaceAll("/favicon.svg", `${basePath}/favicon.svg`)
+  .replaceAll("/manifest.webmanifest", `${basePath}/manifest.webmanifest`)
+  .replaceAll("/apple-touch-icon.png", `${basePath}/apple-touch-icon.png`)
   .replaceAll(
     "https://fifeetch.github.io/og.png",
     `https://fifeetch.github.io${basePath}/og.png`,

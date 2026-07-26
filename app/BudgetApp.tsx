@@ -449,6 +449,17 @@ export default function BudgetApp() {
   }, []);
 
   useEffect(() => {
+    if (!("serviceWorker" in navigator) || !window.isSecureContext) return;
+    const manifestLink = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    const manifestUrl = new URL(manifestLink?.href || "/manifest.webmanifest", window.location.href);
+    const serviceWorkerUrl = new URL("sw.js", manifestUrl);
+    const scopeUrl = new URL("./", serviceWorkerUrl);
+    navigator.serviceWorker.register(serviceWorkerUrl.pathname, { scope: scopeUrl.pathname }).catch(() => {
+      // L'application reste utilisable dans le navigateur si l'installation PWA est indisponible.
+    });
+  }, []);
+
+  useEffect(() => {
     if (!overviewPreferencesLoaded) return;
     window.localStorage.setItem("smart-budget-overview-variant", overviewVariant);
     window.localStorage.setItem("smart-budget-overview-hero-metric", overviewHeroMetric);
