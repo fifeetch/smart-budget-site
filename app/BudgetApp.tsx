@@ -40,6 +40,8 @@ type CsvBalanceMode = "calculate" | "keep" | "custom";
 type CsvImportKind = "bank" | "deferredCard";
 type TransactionFilter = "all" | "income" | "expense" | "review";
 type BudgetPlanScope = "monthly" | "annual";
+type OverviewVariant = "essential" | "pilot" | "actions";
+type OverviewKpiKey = "available" | "income" | "expenses" | "forecast" | "budget" | "review" | "recurring" | "topCategory";
 
 type Account = {
   id: string;
@@ -322,7 +324,7 @@ const navigationItems = [
   ["◎", "Projets"],
   ["◫", "Budgets"],
   ["◌", "Analyse"],
-  ["♙", "Mon foyer"],
+  ["⚙", "Paramètres"],
 ] as const;
 
 const demoAccounts: Account[] = [
@@ -410,6 +412,9 @@ export default function BudgetApp() {
   const [undoHistory, setUndoHistory] = useState<UndoHistoryItem[]>([]);
   const [monthlyBudget, setMonthlyBudget] = useState(2000);
   const [memberEmails, setMemberEmails] = useState<string[]>([]);
+  const [overviewVariant, setOverviewVariant] = useState<OverviewVariant>("essential");
+  const [visibleOverviewKpis, setVisibleOverviewKpis] = useState<OverviewKpiKey[]>(["available", "income", "expenses", "forecast", "budget", "review"]);
+  const [overviewPreferencesLoaded, setOverviewPreferencesLoaded] = useState(false);
   const [authResolved, setAuthResolved] = useState(() => !auth);
   const [isSaving, setIsSaving] = useState(false);
   const generatedRecurringKeys = useRef(new Set<string>());
@@ -422,6 +427,25 @@ export default function BudgetApp() {
     () => accounts.filter((account) => account.visibility === "shared" || !user || account.ownerId === user.uid),
     [accounts, user],
   );
+
+  useEffect(() => {
+    try {
+      const savedVariant = window.localStorage.getItem("smart-budget-overview-variant") as OverviewVariant | null;
+      const savedKpis = JSON.parse(window.localStorage.getItem("smart-budget-overview-kpis") || "null") as OverviewKpiKey[] | null;
+      if (savedVariant && ["essential", "pilot", "actions"].includes(savedVariant)) setOverviewVariant(savedVariant);
+      if (Array.isArray(savedKpis) && savedKpis.length) setVisibleOverviewKpis(savedKpis);
+    } catch {
+      // Les préférences restent facultatives si le stockage local est indisponible.
+    } finally {
+      setOverviewPreferencesLoaded(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!overviewPreferencesLoaded) return;
+    window.localStorage.setItem("smart-budget-overview-variant", overviewVariant);
+    window.localStorage.setItem("smart-budget-overview-kpis", JSON.stringify(visibleOverviewKpis));
+  }, [overviewPreferencesLoaded, overviewVariant, visibleOverviewKpis]);
 
   useEffect(() => {
     if (!auth) return;
@@ -907,6 +931,22 @@ export default function BudgetApp() {
     });
   }, [allVisibleTransactions]);
   const monthlyMax = Math.max(monthlyBudget, ...monthlyData.map((item) => item.total), 1);
+  const overviewKpis: { key: OverviewKpiKey; label: string; value: string; note: string; tone: string; onClick?: () => void }[] = [
+    { key: "available", label: "Disponible après cartes", value: money.format(balanceAfterDeferred), note: "Votre marge réellement disponible", tone: "green", onClick: () => setActiveNav("Comptes") },
+    { key: "income", label: "Revenus du mois", value: money.format(income), note: "Revenus déjà enregistrés", tone: "mint", onClick: () => { setTransactionFilter("income"); setActiveNav("Transactions"); } },
+    { key: "expenses", label: "Dépenses du mois", value: money.format(expenses), note: `${budgetUsage} % du budget mensuel`, tone: "coral", onClick: () => { setTransactionFilter("expense"); setActiveNav("Transactions"); } },
+    { key: "forecast", label: "Solde prévisionnel", value: money.format(cashForecast), note: "À la fin de la période", tone: cashForecast < 0 ? "danger" : "blue" },
+    { key: "budget", label: "Reste à dépenser", value: money.format(remainingBudget), note: `Budget fixé à ${money.format(monthlyBudget)}`, tone: "yellow", onClick: () => setModal("budget") },
+    { key: "review", label: "Opérations à vérifier", value: String(reviewCount), note: "Catégorisation incertaine", tone: reviewCount ? "coral" : "green", onClick: () => { setTransactionFilter("review"); setActiveNav("Transactions"); } },
+    { key: "recurring", label: "Charges récurrentes", value: money.format(recurringTotal), note: "Détectées ce mois-ci", tone: "mint" },
+    { key: "topCategory", label: "Catégorie principale", value: categoryData[0]?.label || "—", note: categoryData[0] ? money.format(categoryData[0].value) : "Aucune dépense", tone: "blue" },
+  ];
+  const selectedOverviewKpis = overviewKpis.filter((kpi) => visibleOverviewKpis.includes(kpi.key));
+  const toggleOverviewKpi = (key: OverviewKpiKey) => {
+    setVisibleOverviewKpis((current) => current.includes(key)
+      ? current.length > 1 ? current.filter((item) => item !== key) : current
+      : [...current, key]);
+  };
 
   useEffect(() => {
     if (!recurringExpenses.length || !visibleAccounts.length) return;
@@ -2082,6 +2122,113 @@ export default function BudgetApp() {
           </form>
         </section>
 
+        <section className="overview-picker" aria-label="Choisir une proposition de vue d’ensemble">
+          <div>
+            <span className="overview-picker-eyebrow">3 propositions</span>
+            <strong>Choisissez votre vue d’ensemble</strong>
+            <small>Votre choix est mémorisé sur cet appareil.</small>
+          </div>
+          <div className="overview-picker-tabs" role="tablist">
+            {([
+              ["essential", "01", "Essentiel", "Clair et équilibré"],
+              ["pilot", "02", "Pilotage", "Plus analytique"],
+              ["actions", "03", "Priorités", "Orienté actions"],
+            ] as const).map(([value, number, label, description]) => (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={overviewVariant === value}
+                className={overviewVariant === value ? "active" : ""}
+                onClick={() => setOverviewVariant(value)}
+              >
+                <span>{number}</span><span><b>{label}</b><small>{description}</small></span>
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <div className={`overview-board overview-${overviewVariant}`}>
+          <section className={`overview-hero card ${cashForecast < 0 ? "forecast-risk" : ""}`}>
+            <div className="overview-hero-copy">
+              <span className="overview-eyebrow">{overviewVariant === "actions" ? "À surveiller aujourd’hui" : overviewVariant === "pilot" ? "Projection du mois" : "Votre situation en un coup d’œil"}</span>
+              <h2>{overviewVariant === "actions" ? `${budgetAlerts.length || 0} priorité${budgetAlerts.length > 1 ? "s" : ""} à traiter` : money.format(cashForecast)}</h2>
+              <p>{overviewVariant === "actions" ? "Les éléments les plus importants sont regroupés ici pour vous aider à agir rapidement." : "Solde prévisionnel à la fin de la période, après les revenus et dépenses attendus."}</p>
+            </div>
+            <div className="overview-budget-meter">
+              <div><span>Budget utilisé</span><b>{budgetUsage} %</b></div>
+              <div className="overview-budget-track"><span style={{ width: `${budgetUsage}%` }} /></div>
+              <small>{money.format(remainingBudget)} encore disponibles sur {money.format(monthlyBudget)}</small>
+            </div>
+            <div className="overview-alert-strip">
+              {budgetAlerts.length ? budgetAlerts.slice(0, 3).map((alert) => (
+                <button key={alert} onClick={() => alert.includes("budget") ? setActiveNav("Analyse") : setActiveNav("Transactions")}>⚠ {alert}</button>
+              )) : <span className="all-clear">✓ Aucun point d’attention pour cette période</span>}
+            </div>
+          </section>
+
+          <section className="overview-kpi-section" aria-label="Indicateurs clés">
+            <div className="overview-section-head">
+              <div><span className="overview-eyebrow">Mes indicateurs</span><strong>{selectedOverviewKpis.length} KPI visibles</strong></div>
+              <button className="text-button" onClick={() => setActiveNav("Paramètres")}>Personnaliser ⚙</button>
+            </div>
+            <div className="overview-kpi-grid">
+              {selectedOverviewKpis.map((kpi) => (
+                <button key={kpi.key} type="button" className={`overview-kpi overview-kpi-${kpi.tone}`} onClick={kpi.onClick}>
+                  <span>{kpi.label}</span><strong>{kpi.value}</strong><small>{kpi.note}</small>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {overviewVariant === "actions" && (
+            <section className="card panel overview-action-panel">
+              <div className="panel-head"><div><span className="overview-eyebrow">À faire</span><h2 className="panel-title">Mes prochaines actions</h2></div><span className="action-count">{Math.min(3, reviewCount + (budgetUsage >= 90 ? 1 : 0))}</span></div>
+              <div className="overview-action-list">
+                {reviewCount > 0 && <button onClick={() => { setTransactionFilter("review"); setActiveNav("Transactions"); }}><span>01</span><div><strong>Vérifier {reviewCount} opérations</strong><small>Pour fiabiliser vos catégories et votre budget</small></div><b>→</b></button>}
+                {budgetUsage >= 90 && <button onClick={() => setActiveNav("Budgets")}><span>02</span><div><strong>Ajuster les budgets dépassés</strong><small>Vous avez utilisé {budgetUsage} % du budget mensuel</small></div><b>→</b></button>}
+                <button onClick={() => openQuickExpense()}><span>03</span><div><strong>Ajouter la dernière dépense</strong><small>Gardez votre prévision à jour</small></div><b>→</b></button>
+              </div>
+            </section>
+          )}
+
+          <section className="card panel overview-spending-panel">
+            <div className="panel-head"><div><span className="overview-eyebrow">Répartition</span><h2 className="panel-title">Où part votre argent ?</h2></div><button className="text-button" onClick={() => setActiveNav("Transactions")}>Voir le détail →</button></div>
+            <div className="chart-wrap overview-chart-wrap">
+              <div className="donut" style={{ background: donutBackground }} aria-label="Répartition des dépenses par catégorie"><span>{budgetUsage} %<small>du budget</small></span></div>
+              <div className="legend">
+                {categoryData.length ? categoryData.slice(0, 5).map((item) => (
+                  <div className="legend-row" key={item.label}><span className="legend-color" style={{ background: item.color }} /><span>{item.label}</span><strong>{money.format(item.value)}</strong></div>
+                )) : <div className="empty-chart">Ajoutez une dépense pour voir sa répartition.</div>}
+              </div>
+            </div>
+          </section>
+
+          <section className="card panel overview-accounts-panel">
+            <div className="panel-head"><div><span className="overview-eyebrow">Liquidités</span><h2 className="panel-title">Mes comptes</h2></div><button className="text-button" onClick={() => setActiveNav("Comptes")}>Tout voir →</button></div>
+            <div className="overview-account-total"><span>Solde cumulé</span><strong>{money.format(balance)}</strong><small>Après encours carte : {money.format(balanceAfterDeferred)}</small></div>
+            <div className="overview-account-list">
+              {visibleAccounts.slice(0, 3).map((account) => (
+                <button key={account.id} onClick={() => setActiveNav("Comptes")}>
+                  <span className="account-icon">{account.type === "Épargne" ? "◎" : account.type === "Carte" ? "▰" : "▣"}</span>
+                  <span><strong>{account.name}</strong><small>{account.type}{account.visibility === "private" ? " · privé" : ""}</small></span>
+                  <b>{money.format(Number(account.balance || 0))}</b>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          {overviewVariant === "pilot" && (
+            <section className="card panel overview-trend-panel">
+              <div className="panel-head"><div><span className="overview-eyebrow">Tendance</span><h2 className="panel-title">6 derniers mois</h2></div><button className="text-button" onClick={() => setActiveNav("Analyse")}>Analyser →</button></div>
+              <div className="overview-mini-chart">
+                {monthlyData.map((month) => <div key={month.key}><span><i style={{ height: `${Math.max(5, (month.total / monthlyMax) * 100)}%` }} /></span><small>{month.label}</small></div>)}
+              </div>
+            </section>
+          )}
+        </div>
+
+        {false && <>
         <section className="budget-usage card" aria-label={`${budgetUsage} pour cent du budget utilisé`}>
           <div className="budget-usage-head">
             <div><strong>Budget utilisé</strong><span>{money.format(expenses)} sur {money.format(monthlyBudget)}</span></div>
@@ -2144,6 +2291,7 @@ export default function BudgetApp() {
             {deferredCardSummaries.map(({ account, pending, nextDebitDate, debitAccount }) => <div className="deferred-card-summary" key={`deferred-${account.id}`}><div><strong>💳 Encours carte</strong><span className="muted">{account.name}{debitAccount ? ` · débité sur ${debitAccount.name}` : ""}</span></div><div className="deferred-card-summary-side"><b>{money.format(pending)}</b><small>{nextDebitDate ? `Prochain débit : ${fullDisplayDate.format(new Date(`${nextDebitDate}T12:00:00`))}` : "Aucune date de débit renseignée"}</small></div></div>)}
           </article>
         </section>
+        </>}
 
         <section className="card panel monthly-chart-card">
           <div className="panel-head"><div><h2 className="panel-title">Évolution des dépenses</h2><p className="muted">Comparaison des six derniers mois.</p></div><span className="budget-target">Budget : {money.format(monthlyBudget)}</span></div>
@@ -2317,13 +2465,26 @@ export default function BudgetApp() {
           </section>
         )}
 
-        {activeNav === "Mon foyer" && (
+        {activeNav === "Paramètres" && (
           <section className="card panel view-section household-view">
             <div className="profile-card">
               <span className="avatar profile-avatar">{(user?.displayName || user?.email || "D").slice(0, 1).toUpperCase()}</span>
               <div><h2 className="panel-title">{user?.displayName || "Mode découverte"}</h2><p className="muted">{user?.email || "Connectez-vous pour créer votre foyer."}</p></div>
             </div>
             <div className="household-settings">
+              <div className="overview-settings">
+                <strong>Vue d’ensemble personnalisée</strong>
+                <p className="muted">Choisissez les KPI affichés. Au moins un indicateur reste toujours visible.</p>
+                <div className="overview-settings-grid">
+                  {overviewKpis.map((kpi) => (
+                    <label key={kpi.key} className={visibleOverviewKpis.includes(kpi.key) ? "selected" : ""}>
+                      <input type="checkbox" checked={visibleOverviewKpis.includes(kpi.key)} onChange={() => toggleOverviewKpi(kpi.key)} />
+                      <span><b>{kpi.label}</b><small>{kpi.note}</small></span>
+                    </label>
+                  ))}
+                </div>
+                <button className="btn btn-soft overview-settings-preview" onClick={() => setActiveNav("Vue d’ensemble")}>Voir ma vue d’ensemble</button>
+              </div>
               <div className="member-settings">
                 <strong>Partage familial</strong>
                 <p className="muted">Chaque membre utilise son propre accès Firebase et retrouve les données du même foyer.</p>
@@ -2359,7 +2520,7 @@ export default function BudgetApp() {
           ["＋", "Ajouter"],
           ["◫", "Budgets"],
           ["◌", "Analyse"],
-          ["♙", "Mon foyer"],
+          ["⚙", "Paramètres"],
         ].map(([icon, label], index) => (
           <button
             key={label}
