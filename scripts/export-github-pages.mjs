@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -41,6 +41,20 @@ if (!response.ok) {
 }
 
 let html = await response.text();
+
+// Intégrer la feuille de style à la page évite qu'un raccourci mobile ou un
+// ancien service worker affiche momentanément le HTML sans sa mise en forme.
+const stylesheetMatch = html.match(/<link rel="stylesheet" href="\/assets\/([^"]+\.css)"[^>]*>/);
+if (stylesheetMatch) {
+  const stylesheet = await readFile(
+    path.join(clientDirectory, "assets", stylesheetMatch[1]),
+    "utf8",
+  );
+  html = html.replace(
+    stylesheetMatch[0],
+    `<style data-smart-budget-styles>${stylesheet}</style>`,
+  );
+}
 
 // GitHub Pages serves project sites below /<repository>/.
 html = html
