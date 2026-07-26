@@ -43,6 +43,7 @@ type BudgetPlanScope = "monthly" | "annual";
 type OverviewVariant = "essential" | "pilot" | "actions";
 type OverviewKpiKey = "available" | "income" | "expenses" | "forecast" | "budget" | "review" | "recurring" | "topCategory";
 type OverviewHeroMetric = "available" | "forecast" | "balance" | "budget";
+type AccountWorkspaceLayout = "rail" | "strip";
 
 type Account = {
   id: string;
@@ -320,8 +321,7 @@ const defaultVisibleReasons: VisibleReasons = {
 
 const navigationItems = [
   ["▦", "Vue d’ensemble"],
-  ["↕", "Transactions"],
-  ["▣", "Comptes"],
+  ["▣", "Comptes & cartes"],
   ["◎", "Projets"],
   ["◫", "Budgets"],
   ["◌", "Analyse"],
@@ -415,6 +415,7 @@ export default function BudgetApp() {
   const [memberEmails, setMemberEmails] = useState<string[]>([]);
   const [overviewVariant, setOverviewVariant] = useState<OverviewVariant>("essential");
   const [overviewHeroMetric, setOverviewHeroMetric] = useState<OverviewHeroMetric>("available");
+  const [accountWorkspaceLayout, setAccountWorkspaceLayout] = useState<AccountWorkspaceLayout>("strip");
   const [visibleOverviewKpis, setVisibleOverviewKpis] = useState<OverviewKpiKey[]>(["available", "income", "expenses", "forecast", "budget", "review"]);
   const [overviewPreferencesLoaded, setOverviewPreferencesLoaded] = useState(false);
   const [authResolved, setAuthResolved] = useState(() => !auth);
@@ -434,9 +435,11 @@ export default function BudgetApp() {
     try {
       const savedVariant = window.localStorage.getItem("smart-budget-overview-variant") as OverviewVariant | null;
       const savedHeroMetric = window.localStorage.getItem("smart-budget-overview-hero-metric") as OverviewHeroMetric | null;
+      const savedAccountLayout = window.localStorage.getItem("smart-budget-account-layout") as AccountWorkspaceLayout | null;
       const savedKpis = JSON.parse(window.localStorage.getItem("smart-budget-overview-kpis") || "null") as OverviewKpiKey[] | null;
       if (savedVariant && ["essential", "pilot", "actions"].includes(savedVariant)) setOverviewVariant(savedVariant);
       if (savedHeroMetric && ["available", "forecast", "balance", "budget"].includes(savedHeroMetric)) setOverviewHeroMetric(savedHeroMetric);
+      if (savedAccountLayout && ["rail", "strip"].includes(savedAccountLayout)) setAccountWorkspaceLayout(savedAccountLayout);
       if (Array.isArray(savedKpis) && savedKpis.length) setVisibleOverviewKpis(savedKpis);
     } catch {
       // Les préférences restent facultatives si le stockage local est indisponible.
@@ -449,8 +452,9 @@ export default function BudgetApp() {
     if (!overviewPreferencesLoaded) return;
     window.localStorage.setItem("smart-budget-overview-variant", overviewVariant);
     window.localStorage.setItem("smart-budget-overview-hero-metric", overviewHeroMetric);
+    window.localStorage.setItem("smart-budget-account-layout", accountWorkspaceLayout);
     window.localStorage.setItem("smart-budget-overview-kpis", JSON.stringify(visibleOverviewKpis));
-  }, [overviewHeroMetric, overviewPreferencesLoaded, overviewVariant, visibleOverviewKpis]);
+  }, [accountWorkspaceLayout, overviewHeroMetric, overviewPreferencesLoaded, overviewVariant, visibleOverviewKpis]);
 
   useEffect(() => {
     if (!auth) return;
@@ -848,6 +852,15 @@ export default function BudgetApp() {
   }, [deferredCardSummaries]);
   const deferredPendingTotal = [...deferredByDebitAccount.values()].reduce((sum, item) => sum + item.pending, 0);
   const balanceAfterDeferred = balance - deferredPendingTotal;
+  const selectedWorkspaceAccount = transactionAccountFilter === "all"
+    ? undefined
+    : visibleAccounts.find((account) => account.id === transactionAccountFilter);
+  const selectedWorkspaceCard = selectedWorkspaceAccount?.type === "Carte"
+    ? deferredCardSummaries.find((summary) => summary.account.id === selectedWorkspaceAccount.id)
+    : undefined;
+  const selectedWorkspaceDeferred = selectedWorkspaceAccount
+    ? deferredByDebitAccount.get(selectedWorkspaceAccount.id)
+    : undefined;
   const parsedCsvCustomBalance = Number(csvCustomBalance.replace(/\s/g, "").replace(",", "."));
   const csvCustomBalanceIsValid = csvBalanceMode !== "custom"
     || (csvCustomBalance.trim() !== "" && Number.isFinite(parsedCsvCustomBalance));
@@ -937,12 +950,12 @@ export default function BudgetApp() {
   }, [allVisibleTransactions]);
   const monthlyMax = Math.max(monthlyBudget, ...monthlyData.map((item) => item.total), 1);
   const overviewKpis: { key: OverviewKpiKey; label: string; value: string; note: string; tone: string; onClick?: () => void }[] = [
-    { key: "available", label: "Disponible après cartes", value: money.format(balanceAfterDeferred), note: "Votre marge réellement disponible", tone: "green", onClick: () => setActiveNav("Comptes") },
-    { key: "income", label: "Revenus du mois", value: money.format(income), note: "Revenus déjà enregistrés", tone: "mint", onClick: () => { setTransactionFilter("income"); setActiveNav("Transactions"); } },
-    { key: "expenses", label: "Dépenses du mois", value: money.format(expenses), note: `${budgetUsage} % du budget mensuel`, tone: "coral", onClick: () => { setTransactionFilter("expense"); setActiveNav("Transactions"); } },
+    { key: "available", label: "Disponible après cartes", value: money.format(balanceAfterDeferred), note: "Votre marge réellement disponible", tone: "green", onClick: () => { setTransactionAccountFilter("all"); setActiveNav("Comptes & cartes"); } },
+    { key: "income", label: "Revenus du mois", value: money.format(income), note: "Revenus déjà enregistrés", tone: "mint", onClick: () => { setTransactionFilter("income"); setActiveNav("Comptes & cartes"); } },
+    { key: "expenses", label: "Dépenses du mois", value: money.format(expenses), note: `${budgetUsage} % du budget mensuel`, tone: "coral", onClick: () => { setTransactionFilter("expense"); setActiveNav("Comptes & cartes"); } },
     { key: "forecast", label: "Solde prévisionnel", value: money.format(cashForecast), note: "À la fin de la période", tone: cashForecast < 0 ? "danger" : "blue" },
     { key: "budget", label: "Reste à dépenser", value: money.format(remainingBudget), note: `Budget fixé à ${money.format(monthlyBudget)}`, tone: "yellow", onClick: () => setModal("budget") },
-    { key: "review", label: "Opérations à vérifier", value: String(reviewCount), note: "Catégorisation incertaine", tone: reviewCount ? "coral" : "green", onClick: () => { setTransactionFilter("review"); setActiveNav("Transactions"); } },
+    { key: "review", label: "Opérations à vérifier", value: String(reviewCount), note: "Catégorisation incertaine", tone: reviewCount ? "coral" : "green", onClick: () => { setTransactionFilter("review"); setActiveNav("Comptes & cartes"); } },
     { key: "recurring", label: "Charges récurrentes", value: money.format(recurringTotal), note: "Détectées ce mois-ci", tone: "mint" },
     { key: "topCategory", label: "Catégorie principale", value: categoryData[0]?.label || "—", note: categoryData[0] ? money.format(categoryData[0].value) : "Aucune dépense", tone: "blue" },
   ];
@@ -2179,7 +2192,7 @@ export default function BudgetApp() {
             </div>
             <div className="overview-alert-strip">
               {budgetAlerts.length ? budgetAlerts.slice(0, 3).map((alert) => (
-                <button key={alert} onClick={() => alert.includes("budget") ? setActiveNav("Analyse") : setActiveNav("Transactions")}>⚠ {alert}</button>
+                <button key={alert} onClick={() => alert.includes("budget") ? setActiveNav("Analyse") : setActiveNav("Comptes & cartes")}>⚠ {alert}</button>
               )) : <span className="all-clear">✓ Aucun point d’attention pour cette période</span>}
             </div>
           </section>
@@ -2202,7 +2215,7 @@ export default function BudgetApp() {
             <section className="card panel overview-action-panel">
               <div className="panel-head"><div><span className="overview-eyebrow">À faire</span><h2 className="panel-title">Mes prochaines actions</h2></div><span className="action-count">{Math.min(3, reviewCount + (budgetUsage >= 90 ? 1 : 0))}</span></div>
               <div className="overview-action-list">
-                {reviewCount > 0 && <button onClick={() => { setTransactionFilter("review"); setActiveNav("Transactions"); }}><span>01</span><div><strong>Vérifier {reviewCount} opérations</strong><small>Pour fiabiliser vos catégories et votre budget</small></div><b>→</b></button>}
+                {reviewCount > 0 && <button onClick={() => { setTransactionFilter("review"); setActiveNav("Comptes & cartes"); }}><span>01</span><div><strong>Vérifier {reviewCount} opérations</strong><small>Pour fiabiliser vos catégories et votre budget</small></div><b>→</b></button>}
                 {budgetUsage >= 90 && <button onClick={() => setActiveNav("Budgets")}><span>02</span><div><strong>Ajuster les budgets dépassés</strong><small>Vous avez utilisé {budgetUsage} % du budget mensuel</small></div><b>→</b></button>}
                 <button onClick={() => openQuickExpense()}><span>03</span><div><strong>Ajouter la dernière dépense</strong><small>Gardez votre prévision à jour</small></div><b>→</b></button>
               </div>
@@ -2210,7 +2223,7 @@ export default function BudgetApp() {
           )}
 
           <section className="card panel overview-spending-panel">
-            <div className="panel-head"><div><span className="overview-eyebrow">Répartition</span><h2 className="panel-title">Où part votre argent ?</h2></div><button className="text-button" onClick={() => setActiveNav("Transactions")}>Voir le détail →</button></div>
+            <div className="panel-head"><div><span className="overview-eyebrow">Répartition</span><h2 className="panel-title">Où part votre argent ?</h2></div><button className="text-button" onClick={() => setActiveNav("Comptes & cartes")}>Voir le détail →</button></div>
             <div className="chart-wrap overview-chart-wrap">
               <div className="donut" style={{ background: donutBackground }} aria-label="Répartition des dépenses par catégorie"><span>{budgetUsage} %<small>du budget</small></span></div>
               <div className="legend">
@@ -2222,11 +2235,11 @@ export default function BudgetApp() {
           </section>
 
           <section className="card panel overview-accounts-panel">
-            <div className="panel-head"><div><span className="overview-eyebrow">Liquidités</span><h2 className="panel-title">Mes comptes</h2></div><button className="text-button" onClick={() => setActiveNav("Comptes")}>Tout voir →</button></div>
+            <div className="panel-head"><div><span className="overview-eyebrow">Liquidités</span><h2 className="panel-title">Mes comptes</h2></div><button className="text-button" onClick={() => { setTransactionAccountFilter("all"); setActiveNav("Comptes & cartes"); }}>Tout voir →</button></div>
             <div className="overview-account-total"><span>Solde cumulé</span><strong>{money.format(balance)}</strong><small>Après encours carte : {money.format(balanceAfterDeferred)}</small></div>
             <div className="overview-account-list">
               {visibleAccounts.slice(0, 3).map((account) => (
-                <button key={account.id} onClick={() => setActiveNav("Comptes")}>
+                <button key={account.id} onClick={() => { setTransactionAccountFilter(account.id); setActiveNav("Comptes & cartes"); }}>
                   <span className="account-icon">{account.type === "Épargne" ? "◎" : account.type === "Carte" ? "▰" : "▣"}</span>
                   <span><strong>{account.name}</strong><small>{account.type}{account.visibility === "private" ? " · privé" : ""}</small></span>
                   <b>{money.format(Number(account.balance || 0))}</b>
@@ -2256,9 +2269,9 @@ export default function BudgetApp() {
         </section>
 
         <section className="summary-grid" aria-label="Résumé du budget">
-          <SummaryCard label="Disponible après cartes" value={balanceAfterDeferred} note={deferredPendingTotal ? `Solde réel ${money.format(balance)} − cartes ${money.format(deferredPendingTotal)}` : "Voir le détail des comptes"} accent="var(--green)" onClick={() => setActiveNav("Comptes")} />
-          <SummaryCard label="Revenus ce mois" value={income} note="Voir les revenus enregistrés" accent="var(--mint)" onClick={() => { setTransactionFilter("income"); setActiveNav("Transactions"); }} />
-          <SummaryCard label="Dépenses ce mois" value={expenses} note="Voir les dépenses enregistrées" accent="var(--coral)" onClick={() => { setTransactionFilter("expense"); setActiveNav("Transactions"); }} />
+          <SummaryCard label="Disponible après cartes" value={balanceAfterDeferred} note={deferredPendingTotal ? `Solde réel ${money.format(balance)} − cartes ${money.format(deferredPendingTotal)}` : "Voir le détail des comptes"} accent="var(--green)" onClick={() => setActiveNav("Comptes & cartes")} />
+          <SummaryCard label="Revenus ce mois" value={income} note="Voir les revenus enregistrés" accent="var(--mint)" onClick={() => { setTransactionFilter("income"); setActiveNav("Comptes & cartes"); }} />
+          <SummaryCard label="Dépenses ce mois" value={expenses} note="Voir les dépenses enregistrées" accent="var(--coral)" onClick={() => { setTransactionFilter("expense"); setActiveNav("Comptes & cartes"); }} />
         </section>
 
         <section className={`cash-forecast card ${cashForecast < 0 ? "forecast-risk" : ""}`} aria-label="Prévision de trésorerie">
@@ -2266,13 +2279,13 @@ export default function BudgetApp() {
           <div className="budget-alert-panel">
             <div className="budget-alert-heading"><span>Alertes budgétaires</span><b>{budgetAlerts.length}</b></div>
             <div className="budget-alerts" aria-label="Alertes budgétaires">
-              {budgetAlerts.length ? budgetAlerts.map((alert) => <button key={alert} onClick={() => alert.includes("budget") ? setActiveNav("Analyse") : alert.includes("vérifier") ? setActiveNav("Transactions") : undefined}>⚠ {alert}</button>) : <span className="all-clear">✓ Aucun point d’attention pour cette période</span>}
+              {budgetAlerts.length ? budgetAlerts.map((alert) => <button key={alert} onClick={() => alert.includes("budget") ? setActiveNav("Analyse") : alert.includes("vérifier") ? setActiveNav("Comptes & cartes") : undefined}>⚠ {alert}</button>) : <span className="all-clear">✓ Aucun point d’attention pour cette période</span>}
             </div>
           </div>
         </section>
 
         <section className="analysis-grid" aria-label="Analyse du budget">
-          <button className="analysis-card" onClick={() => { setTransactionFilter("review"); setActiveNav("Transactions"); }}><span>À vérifier</span><strong>{reviewCount}</strong><small>Opérations dont la catégorie est incertaine</small></button>
+          <button className="analysis-card" onClick={() => { setTransactionFilter("review"); setActiveNav("Comptes & cartes"); }}><span>À vérifier</span><strong>{reviewCount}</strong><small>Opérations dont la catégorie est incertaine</small></button>
           <article className="analysis-card"><span>Charges récurrentes</span><strong>{money.format(recurringTotal)}</strong><small>Ce mois</small></article>
           <article className="analysis-card"><span>Catégorie principale</span><strong>{categoryData[0]?.label || "—"}</strong><small>{categoryData[0] ? money.format(categoryData[0].value) : "Ajoutez une dépense"}</small></article>
           <article className="analysis-card"><span>Commerçant principal</span><strong>{merchantData[0]?.[0] || "—"}</strong><small>{merchantData[0] ? money.format(merchantData[0][1]) : "Aucune donnée"}</small></article>
@@ -2280,7 +2293,7 @@ export default function BudgetApp() {
 
         <section className="dashboard-grid">
           <article className="card panel">
-            <div className="panel-head"><h2 className="panel-title">Où part votre argent ?</h2><button className="text-button" onClick={() => setActiveNav("Transactions")}>Voir le détail →</button></div>
+            <div className="panel-head"><h2 className="panel-title">Où part votre argent ?</h2><button className="text-button" onClick={() => setActiveNav("Comptes & cartes")}>Voir le détail →</button></div>
             <div className="chart-wrap">
               <div className="donut" style={{ background: donutBackground }} aria-label="Répartition des dépenses par catégorie"><span>{budgetUsage} %<small>du budget</small></span></div>
               <div className="legend">
@@ -2326,7 +2339,7 @@ export default function BudgetApp() {
         <section className="card transactions">
           <div className="panel-head">
             <h2 className="panel-title">Derniers mouvements</h2>
-            <div><button className="text-button" onClick={openCsvImport}>Importer un CSV</button><button className="text-button" onClick={() => setActiveNav("Transactions")}>Tout voir →</button></div>
+            <div><button className="text-button" onClick={openCsvImport}>Importer un CSV</button><button className="text-button" onClick={() => setActiveNav("Comptes & cartes")}>Tout voir →</button></div>
           </div>
           <div className="transaction-list">
             {visibleTransactions.length ? visibleTransactions.slice(0, 7).map((transaction) => (
@@ -2360,12 +2373,67 @@ export default function BudgetApp() {
           </>
         )}
 
-        {activeNav === "Transactions" && (
-          <section className="card transactions view-section">
-            <div className="panel-head">
-              <div><h2 className="panel-title">Toutes les opérations</h2><p className="muted">Dépenses et revenus de la période sélectionnée.</p></div>
-              <div className="view-actions"><button className="btn btn-soft" onClick={openCsvImport}>Importer un CSV</button><button className="btn btn-soft" onClick={() => openRecurringEditor()}>＋ Charge mensuelle</button><button className="btn btn-soft" onClick={() => setModal("undoHistory")}>Historique des ajouts</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
+        {activeNav === "Comptes & cartes" && (
+          <section className="accounts-workspace view-section">
+            <div className="accounts-workspace-top">
+              <div>
+                <span className="overview-eyebrow">Espace financier</span>
+                <h2 className="panel-title">Comptes & cartes</h2>
+                <p className="muted">Sélectionnez un compte ou une carte pour afficher immédiatement les opérations liées.</p>
+              </div>
+              <div className="accounts-workspace-actions">
+                <div className="accounts-layout-switch" role="radiogroup" aria-label="Disposition des comptes">
+                  <button type="button" role="radio" aria-checked={accountWorkspaceLayout === "rail"} className={accountWorkspaceLayout === "rail" ? "active" : ""} onClick={() => setAccountWorkspaceLayout("rail")}><span>▥</span><b>Sélection latérale</b></button>
+                  <button type="button" role="radio" aria-checked={accountWorkspaceLayout === "strip"} className={accountWorkspaceLayout === "strip" ? "active" : ""} onClick={() => setAccountWorkspaceLayout("strip")}><span>▤</span><b>Bandeau supérieur</b></button>
+                </div>
+                <button className="btn btn-primary" onClick={() => openAccountEditor()}>＋ Ajouter un compte</button>
+              </div>
             </div>
+            <div className={`accounts-workspace-grid accounts-layout-${accountWorkspaceLayout}`}>
+              <div className="accounts-selector" aria-label="Sélectionner un compte ou une carte">
+                <button className={`accounts-selector-button accounts-selector-all ${transactionAccountFilter === "all" ? "active" : ""}`} onClick={() => setTransactionAccountFilter("all")}>
+                  <span className="account-icon">⌂</span>
+                  <span><b>Tous les comptes</b><small>Vue consolidée</small></span>
+                  <strong>{money.format(balanceAfterDeferred)}</strong>
+                </button>
+                {visibleAccounts.map((account) => {
+                  const cardSummary = deferredCardSummaries.find((summary) => summary.account.id === account.id);
+                  const deferred = deferredByDebitAccount.get(account.id);
+                  const displayBalance = account.type === "Carte" ? cardSummary?.pending || 0 : Number(account.balance || 0) - (deferred?.pending || 0);
+                  return (
+                    <button key={account.id} className={`accounts-selector-button ${transactionAccountFilter === account.id ? "active" : ""}`} onClick={() => setTransactionAccountFilter(account.id)}>
+                      <span className="account-icon">{account.type === "Épargne" ? "◎" : account.type === "Carte" ? "▰" : "▣"}</span>
+                      <span><b>{account.name}</b><small>{account.type === "Carte" ? "Carte à débit différé" : deferred ? "Après débit des cartes" : account.type}</small></span>
+                      <strong>{account.type === "Carte" && displayBalance ? "−" : ""}{money.format(displayBalance)}</strong>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="card transactions accounts-workspace-detail">
+                <div className={`accounts-workspace-summary ${selectedWorkspaceAccount?.type === "Carte" ? "card-summary" : ""}`}>
+                  <div>
+                    <span>{selectedWorkspaceAccount ? selectedWorkspaceAccount.type === "Carte" ? "Encours de la carte" : "Solde disponible" : "Disponible après cartes"}</span>
+                    <strong>{selectedWorkspaceAccount
+                      ? selectedWorkspaceAccount.type === "Carte"
+                        ? money.format(selectedWorkspaceCard?.pending || 0)
+                        : money.format(Number(selectedWorkspaceAccount.balance || 0) - (selectedWorkspaceDeferred?.pending || 0))
+                      : money.format(balanceAfterDeferred)}</strong>
+                    <small>{selectedWorkspaceAccount
+                      ? selectedWorkspaceAccount.type === "Carte"
+                        ? selectedWorkspaceCard?.nextDebitDate
+                          ? `Débit prévu le ${fullDisplayDate.format(new Date(`${selectedWorkspaceCard.nextDebitDate}T12:00:00`))} sur ${selectedWorkspaceCard.debitAccount?.name || "le compte lié"}`
+                          : "Aucun débit à venir sur la période."
+                        : selectedWorkspaceDeferred
+                          ? `Solde bancaire ${money.format(Number(selectedWorkspaceAccount.balance || 0))} − cartes ${money.format(selectedWorkspaceDeferred.pending)}`
+                          : balanceVerificationLabel(selectedWorkspaceAccount.balanceVerifiedAt)
+                      : `Solde bancaire ${money.format(balance)} − encours cartes ${money.format(deferredPendingTotal)}`}</small>
+                  </div>
+                  {selectedWorkspaceAccount && <button className="btn btn-soft" onClick={() => openAccountEditor(selectedWorkspaceAccount)}>Mettre à jour le compte</button>}
+                </div>
+                <div className="panel-head">
+                  <div><h2 className="panel-title">{selectedWorkspaceAccount ? `Opérations · ${selectedWorkspaceAccount.name}` : "Toutes les opérations"}</h2><p className="muted">Dépenses et revenus de la période sélectionnée.</p></div>
+                  <div className="view-actions"><button className="btn btn-soft" onClick={openCsvImport}>Importer un CSV</button><button className="btn btn-soft" onClick={() => openRecurringEditor()}>＋ Charge mensuelle</button><button className="btn btn-soft" onClick={() => setModal("undoHistory")}>Historique des ajouts</button><button className="btn btn-primary" onClick={() => openQuickExpense()}>＋ Ajouter</button></div>
+                </div>
             <div className="transaction-filters" role="group" aria-label="Filtrer les opérations">
               {(["all", "expense", "income", "review"] as TransactionFilter[]).map((filter) => <button key={filter} className={transactionFilter === filter ? "active" : ""} onClick={() => setTransactionFilter(filter)}>{filter === "all" ? "Tout" : filter === "expense" ? "Dépenses" : filter === "income" ? "Revenus" : "À vérifier"}</button>)}
             </div>
@@ -2391,6 +2459,8 @@ export default function BudgetApp() {
             <div className="recurring-list">
               <div className="panel-head"><div><h3 className="panel-title">Charges récurrentes</h3><p className="muted">Les prélèvements actifs sont générés chaque mois.</p></div><button className="text-button" onClick={() => openRecurringEditor()}>＋ Ajouter</button></div>
               {recurringExpenses.length ? recurringExpenses.map((item) => <div className="recurring-row" key={item.id}><div><strong>{item.label}</strong><span className="muted">{money.format(item.amount)} · le {item.day} de chaque mois</span></div><div className="row-actions"><button onClick={() => openRecurringEditor(item)}>Modifier</button><button className="danger-link" onClick={() => deleteRecurringExpense(item)}>Supprimer</button></div></div>) : <div className="empty-state">Aucune charge récurrente programmée.</div>}
+            </div>
+              </div>
             </div>
           </section>
         )}
@@ -2423,7 +2493,7 @@ export default function BudgetApp() {
               <div className="budget-alert-panel">
                 <div className="budget-alert-heading"><span>Alertes budgétaires</span><b>{budgetAlerts.length}</b></div>
                 <div className="budget-alerts">
-                  {budgetAlerts.length ? budgetAlerts.map((alert) => <button key={alert} onClick={() => alert.includes("vérifier") ? setActiveNav("Transactions") : undefined}>⚠ {alert}</button>) : <span className="all-clear">✓ Aucun point d’attention pour cette période</span>}
+                  {budgetAlerts.length ? budgetAlerts.map((alert) => <button key={alert} onClick={() => alert.includes("vérifier") ? setActiveNav("Comptes & cartes") : undefined}>⚠ {alert}</button>) : <span className="all-clear">✓ Aucun point d’attention pour cette période</span>}
                 </div>
               </div>
             </section>
@@ -2554,7 +2624,7 @@ export default function BudgetApp() {
       <nav className="mobile-nav" aria-label="Navigation mobile">
         {[
           ["▦", "Vue d’ensemble"],
-          ["↕", "Transactions"],
+          ["▣", "Comptes & cartes"],
           ["＋", "Ajouter"],
           ["◫", "Budgets"],
           ["◌", "Analyse"],

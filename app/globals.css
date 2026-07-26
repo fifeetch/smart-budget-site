@@ -352,6 +352,58 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .month-track span { display: block; width: 100%; min-height: 3px; border-radius: inherit; background: linear-gradient(180deg,var(--green-2),var(--green)); transition: height 250ms ease; }
 .transactions { margin-top: 18px; overflow: hidden; }
 .transactions .panel-head { padding: 22px 23px 0; }
+.accounts-workspace { display: grid; gap: 16px; }
+.accounts-workspace-top {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  padding: 18px 20px; border: 1px solid var(--line); border-radius: 18px;
+  background: rgba(255,255,255,.72); box-shadow: 0 12px 30px rgba(21,66,49,.06);
+}
+.accounts-workspace-top > div:first-child { display: grid; gap: 4px; }
+.accounts-workspace-actions { display: flex; align-items: center; gap: 10px; }
+.accounts-layout-switch {
+  display: flex; gap: 5px; padding: 5px; border: 1px solid var(--line);
+  border-radius: 14px; background: #f5f8f3;
+}
+.accounts-layout-switch button {
+  display: flex; align-items: center; gap: 7px; min-height: 38px; padding: 8px 11px;
+  border: 0; border-radius: 10px; color: var(--ink-soft); background: transparent;
+  cursor: pointer; white-space: nowrap;
+}
+.accounts-layout-switch button span { color: var(--green-2); font-size: 17px; }
+.accounts-layout-switch button b { font-size: 11px; }
+.accounts-layout-switch button.active { color: #fff; background: var(--green); box-shadow: 0 7px 16px rgba(19,82,60,.18); }
+.accounts-layout-switch button.active span { color: var(--lime); }
+.accounts-workspace-grid { display: grid; gap: 16px; align-items: start; }
+.accounts-layout-rail { grid-template-columns: minmax(230px,.58fr) minmax(0,1.75fr); }
+.accounts-layout-strip { grid-template-columns: minmax(0,1fr); }
+.accounts-selector { display: grid; gap: 9px; }
+.accounts-layout-strip .accounts-selector { grid-template-columns: repeat(auto-fit,minmax(210px,1fr)); }
+.accounts-selector-button {
+  display: grid; grid-template-columns: 36px minmax(0,1fr); gap: 3px 10px; align-items: center;
+  min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 14px;
+  color: var(--ink); background: rgba(255,255,255,.86); text-align: left; cursor: pointer;
+  box-shadow: 0 7px 18px rgba(21,66,49,.04); transition: border-color 150ms ease, transform 150ms ease, box-shadow 150ms ease;
+}
+.accounts-selector-button:hover { transform: translateY(-1px); border-color: #a9cbb9; box-shadow: 0 9px 22px rgba(21,66,49,.08); }
+.accounts-selector-button.active { border-color: var(--green-2); background: #f1f8f2; box-shadow: inset 0 0 0 1px var(--green-2), 0 8px 22px rgba(21,66,49,.08); }
+.accounts-selector-button .account-icon { grid-row: 1 / span 2; }
+.accounts-selector-button > span:nth-child(2) { display: grid; min-width: 0; }
+.accounts-selector-button b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.accounts-selector-button small { overflow: hidden; color: var(--muted); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.accounts-selector-button > strong { grid-column: 2; color: var(--green); font-size: 14px; }
+.accounts-selector-all > strong { color: var(--green-2); }
+.accounts-workspace-detail { min-width: 0; margin-top: 0; }
+.accounts-workspace-summary {
+  display: flex; align-items: center; justify-content: space-between; gap: 18px;
+  margin: 16px 16px 0; padding: 17px 18px; border-radius: 15px;
+  color: #fff; background: linear-gradient(135deg,var(--green),#236d52);
+}
+.accounts-workspace-summary.card-summary { color: var(--ink); background: linear-gradient(135deg,#fff9e9,#fff2c8); }
+.accounts-workspace-summary > div { display: grid; gap: 3px; }
+.accounts-workspace-summary span { font-size: 10px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
+.accounts-workspace-summary strong { font-size: clamp(24px,3vw,34px); line-height: 1.05; }
+.accounts-workspace-summary small { font-size: 10px; opacity: .8; }
+.accounts-workspace-summary:not(.card-summary) .btn-soft { border-color: rgba(255,255,255,.34); color: #fff; background: rgba(255,255,255,.12); }
 .transaction-list { display: grid; }
 .transaction-filters { display: flex; gap: 8px; margin: 0 23px 16px; }
 .transaction-filters button { border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--ink-soft); padding: 7px 13px; cursor: pointer; }
@@ -714,6 +766,9 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
   .overview-pilot .overview-accounts-panel, .overview-pilot .overview-trend-panel,
   .overview-actions .overview-action-panel, .overview-actions .overview-hero,
   .overview-actions .overview-kpi-section, .overview-actions .overview-spending-panel, .overview-actions .overview-accounts-panel { grid-column: 1; }
+  .accounts-layout-rail { grid-template-columns: minmax(190px,.55fr) minmax(0,1.45fr); }
+  .accounts-workspace-top { align-items: flex-start; flex-direction: column; }
+  .accounts-workspace-actions { width: 100%; justify-content: space-between; }
 }
 
 @media (max-width: 720px) {
@@ -768,6 +823,14 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
   .month-column { grid-template-rows: 1fr 20px; }
   .month-column > strong { display: none; }
   .transaction-row { grid-template-columns: 40px 1fr auto; }
+  .accounts-layout-rail, .accounts-layout-strip { grid-template-columns: 1fr; }
+  .accounts-workspace-actions { align-items: stretch; flex-direction: column; }
+  .accounts-layout-switch { display: grid; grid-template-columns: 1fr 1fr; }
+  .accounts-layout-switch button { justify-content: center; white-space: normal; text-align: left; }
+  .accounts-layout-strip .accounts-selector, .accounts-layout-rail .accounts-selector { display: flex; overflow-x: auto; padding-bottom: 4px; scroll-snap-type: x proximity; }
+  .accounts-selector-button { flex: 0 0 min(78vw,260px); scroll-snap-align: start; }
+  .accounts-workspace-summary { align-items: flex-start; flex-direction: column; }
+  .accounts-workspace-summary .btn { width: 100%; }
   .transaction-category, .transaction-date { display: none; }
   .goals-banner { grid-template-columns: 1fr; }
   .form-grid { grid-template-columns: 1fr; }
