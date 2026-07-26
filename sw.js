@@ -1,4 +1,4 @@
-const CACHE_NAME = "smart-budget-shell-v1";
+const CACHE_NAME = "smart-budget-shell-v2";
 const SHELL_FILES = [
   "./",
   "./manifest.webmanifest",
