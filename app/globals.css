@@ -582,6 +582,13 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .overview-pilot, .overview-actions { grid-template-columns: repeat(12,minmax(0,1fr)); }
 .overview-hero { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(260px,.8fr) minmax(300px,1.2fr); gap: 18px 28px; padding: 22px 24px; overflow: hidden; }
 .overview-hero-copy { display: grid; align-content: center; gap: 5px; }
+.overview-hero-metric-picker { display: grid; justify-items: start; gap: 4px; margin-bottom: 2px; }
+.overview-hero-metric-picker > span { color: var(--green-2); font-size: 9px; font-weight: 850; letter-spacing: .13em; text-transform: uppercase; }
+.overview-hero-metric-picker select {
+  max-width: 100%; border: 0; border-radius: 8px; padding: 3px 26px 3px 0; color: var(--green);
+  background: transparent; font-size: 11px; font-weight: 800; cursor: pointer;
+}
+.overview-hero-metric-picker select:hover { color: var(--green-2); }
 .overview-hero-copy h2 { margin: 0; color: var(--green); font-size: clamp(29px,3.2vw,43px); letter-spacing: -.055em; line-height: 1; }
 .overview-hero-copy p { max-width: 620px; margin: 2px 0 0; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .overview-budget-meter { display: grid; align-content: center; gap: 8px; }
@@ -664,6 +671,20 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .overview-action-list button > b { color: var(--green-2); }
 
 .overview-settings { grid-column: 1 / -1; padding: 18px; border: 1px solid rgba(40,116,90,.2); border-radius: 16px; background: linear-gradient(135deg,#f3faf4,#fff); }
+.overview-layout-settings { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 9px; margin-top: 15px; }
+.overview-layout-settings button {
+  display: grid; grid-template-columns: 28px minmax(0,1fr); gap: 10px; min-height: 104px;
+  border: 1px solid var(--line); border-radius: 14px; padding: 13px; background: #fff; text-align: left; cursor: pointer;
+}
+.overview-layout-settings button.selected { color: #fff; border-color: var(--green); background: var(--green); box-shadow: 0 10px 24px rgba(23,79,61,.16); }
+.overview-layout-check { width: 28px; height: 28px; display: grid; place-items: center; border-radius: 9px; color: var(--green); background: #e8f1e9; font-size: 12px; font-weight: 900; }
+.overview-layout-settings button.selected .overview-layout-check { background: var(--lime); }
+.overview-layout-settings button > span:last-child { display: grid; align-content: start; gap: 3px; min-width: 0; }
+.overview-layout-settings b { font-size: 12px; }
+.overview-layout-settings small { color: var(--muted); font-size: 10px; }
+.overview-layout-settings em { margin-top: 4px; color: var(--muted); font-size: 9px; font-style: normal; line-height: 1.35; }
+.overview-layout-settings button.selected small, .overview-layout-settings button.selected em { color: #c9dcd3; }
+.overview-kpi-settings-title { margin: 20px 0 3px; font-size: 13px; }
 .overview-settings-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin-top: 13px; }
 .overview-settings-grid label { display: grid; grid-template-columns: 19px 1fr; gap: 9px; align-items: start; padding: 11px; border: 1px solid var(--line); border-radius: 12px; background: #fff; cursor: pointer; }
 .overview-settings-grid label.selected { border-color: #9fc5ad; background: #f5fbf5; }
@@ -706,7 +727,7 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
   .overview-kpi-grid, .overview-pilot .overview-kpi-grid { display: flex; margin-inline: -16px; padding: 0 16px 7px; overflow-x: auto; }
   .overview-kpi { flex: 0 0 175px; }
   .overview-chart-wrap { min-height: 0; }
-  .overview-settings-grid { grid-template-columns: 1fr; }
+  .overview-layout-settings, .overview-settings-grid { grid-template-columns: 1fr; }
   .app-shell { display: block; padding-bottom: 68px; }
   .sidebar { display: none; }
   .main { padding: 21px 16px 32px; }

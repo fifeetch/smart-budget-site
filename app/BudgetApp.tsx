@@ -42,6 +42,7 @@ type TransactionFilter = "all" | "income" | "expense" | "review";
 type BudgetPlanScope = "monthly" | "annual";
 type OverviewVariant = "essential" | "pilot" | "actions";
 type OverviewKpiKey = "available" | "income" | "expenses" | "forecast" | "budget" | "review" | "recurring" | "topCategory";
+type OverviewHeroMetric = "available" | "forecast" | "balance" | "budget";
 
 type Account = {
   id: string;
@@ -413,6 +414,7 @@ export default function BudgetApp() {
   const [monthlyBudget, setMonthlyBudget] = useState(2000);
   const [memberEmails, setMemberEmails] = useState<string[]>([]);
   const [overviewVariant, setOverviewVariant] = useState<OverviewVariant>("essential");
+  const [overviewHeroMetric, setOverviewHeroMetric] = useState<OverviewHeroMetric>("available");
   const [visibleOverviewKpis, setVisibleOverviewKpis] = useState<OverviewKpiKey[]>(["available", "income", "expenses", "forecast", "budget", "review"]);
   const [overviewPreferencesLoaded, setOverviewPreferencesLoaded] = useState(false);
   const [authResolved, setAuthResolved] = useState(() => !auth);
@@ -431,8 +433,10 @@ export default function BudgetApp() {
   useEffect(() => {
     try {
       const savedVariant = window.localStorage.getItem("smart-budget-overview-variant") as OverviewVariant | null;
+      const savedHeroMetric = window.localStorage.getItem("smart-budget-overview-hero-metric") as OverviewHeroMetric | null;
       const savedKpis = JSON.parse(window.localStorage.getItem("smart-budget-overview-kpis") || "null") as OverviewKpiKey[] | null;
       if (savedVariant && ["essential", "pilot", "actions"].includes(savedVariant)) setOverviewVariant(savedVariant);
+      if (savedHeroMetric && ["available", "forecast", "balance", "budget"].includes(savedHeroMetric)) setOverviewHeroMetric(savedHeroMetric);
       if (Array.isArray(savedKpis) && savedKpis.length) setVisibleOverviewKpis(savedKpis);
     } catch {
       // Les préférences restent facultatives si le stockage local est indisponible.
@@ -444,8 +448,9 @@ export default function BudgetApp() {
   useEffect(() => {
     if (!overviewPreferencesLoaded) return;
     window.localStorage.setItem("smart-budget-overview-variant", overviewVariant);
+    window.localStorage.setItem("smart-budget-overview-hero-metric", overviewHeroMetric);
     window.localStorage.setItem("smart-budget-overview-kpis", JSON.stringify(visibleOverviewKpis));
-  }, [overviewPreferencesLoaded, overviewVariant, visibleOverviewKpis]);
+  }, [overviewHeroMetric, overviewPreferencesLoaded, overviewVariant, visibleOverviewKpis]);
 
   useEffect(() => {
     if (!auth) return;
@@ -942,6 +947,13 @@ export default function BudgetApp() {
     { key: "topCategory", label: "Catégorie principale", value: categoryData[0]?.label || "—", note: categoryData[0] ? money.format(categoryData[0].value) : "Aucune dépense", tone: "blue" },
   ];
   const selectedOverviewKpis = overviewKpis.filter((kpi) => visibleOverviewKpis.includes(kpi.key));
+  const overviewHeroMetrics: { key: OverviewHeroMetric; label: string; amount: number; value: string; description: string }[] = [
+    { key: "available", label: "Disponible après cartes", amount: balanceAfterDeferred, value: money.format(balanceAfterDeferred), description: deferredPendingTotal ? `Solde bancaire ${money.format(balance)} − encours cartes ${money.format(deferredPendingTotal)}` : "Solde bancaire disponible, encours des cartes à débit différé déduit." },
+    { key: "forecast", label: "Solde prévisionnel", amount: cashForecast, value: money.format(cashForecast), description: "Projection en fin de période selon les revenus et dépenses prévus." },
+    { key: "balance", label: "Solde bancaire cumulé", amount: balance, value: money.format(balance), description: "Somme des soldes actuels, avant déduction des cartes à débit différé." },
+    { key: "budget", label: "Reste du budget", amount: remainingBudget, value: money.format(remainingBudget), description: `${money.format(expenses)} dépensés sur un budget mensuel de ${money.format(monthlyBudget)}.` },
+  ];
+  const selectedHeroMetric = overviewHeroMetrics.find((metric) => metric.key === overviewHeroMetric) || overviewHeroMetrics[0];
   const toggleOverviewKpi = (key: OverviewKpiKey) => {
     setVisibleOverviewKpis((current) => current.includes(key)
       ? current.length > 1 ? current.filter((item) => item !== key) : current
@@ -2124,11 +2136,11 @@ export default function BudgetApp() {
 
         <section className="overview-picker" aria-label="Choisir une proposition de vue d’ensemble">
           <div>
-            <span className="overview-picker-eyebrow">3 propositions</span>
-            <strong>Choisissez votre vue d’ensemble</strong>
-            <small>Votre choix est mémorisé sur cet appareil.</small>
+            <span className="overview-picker-eyebrow">Changer de vue</span>
+            <strong>3 vues d’ensemble interchangeables</strong>
+            <small>Cliquez sur une disposition : le tableau de bord se réorganise immédiatement.</small>
           </div>
-          <div className="overview-picker-tabs" role="tablist">
+          <div className="overview-picker-tabs" role="tablist" aria-label="Vues d’ensemble disponibles">
             {([
               ["essential", "01", "Essentiel", "Clair et équilibré"],
               ["pilot", "02", "Pilotage", "Plus analytique"],
@@ -2149,11 +2161,16 @@ export default function BudgetApp() {
         </section>
 
         <div className={`overview-board overview-${overviewVariant}`}>
-          <section className={`overview-hero card ${cashForecast < 0 ? "forecast-risk" : ""}`}>
+          <section className={`overview-hero card ${selectedHeroMetric.amount < 0 ? "forecast-risk" : ""}`}>
             <div className="overview-hero-copy">
-              <span className="overview-eyebrow">{overviewVariant === "actions" ? "À surveiller aujourd’hui" : overviewVariant === "pilot" ? "Projection du mois" : "Votre situation en un coup d’œil"}</span>
-              <h2>{overviewVariant === "actions" ? `${budgetAlerts.length || 0} priorité${budgetAlerts.length > 1 ? "s" : ""} à traiter` : money.format(cashForecast)}</h2>
-              <p>{overviewVariant === "actions" ? "Les éléments les plus importants sont regroupés ici pour vous aider à agir rapidement." : "Solde prévisionnel à la fin de la période, après les revenus et dépenses attendus."}</p>
+              <label className="overview-hero-metric-picker">
+                <span>Montant principal</span>
+                <select value={overviewHeroMetric} onChange={(event) => setOverviewHeroMetric(event.target.value as OverviewHeroMetric)} aria-label="Montant principal de la vue d’ensemble">
+                  {overviewHeroMetrics.map((metric) => <option key={metric.key} value={metric.key}>{metric.label}</option>)}
+                </select>
+              </label>
+              <h2>{selectedHeroMetric.value}</h2>
+              <p>{selectedHeroMetric.description}</p>
             </div>
             <div className="overview-budget-meter">
               <div><span>Budget utilisé</span><b>{budgetUsage} %</b></div>
@@ -2474,7 +2491,28 @@ export default function BudgetApp() {
             <div className="household-settings">
               <div className="overview-settings">
                 <strong>Vue d’ensemble personnalisée</strong>
-                <p className="muted">Choisissez les KPI affichés. Au moins un indicateur reste toujours visible.</p>
+                <p className="muted">Choisissez la disposition du tableau de bord et les KPI à afficher.</p>
+                <div className="overview-layout-settings" role="radiogroup" aria-label="Disposition de la vue d’ensemble">
+                  {([
+                    ["essential", "Essentiel", "Une lecture rapide et équilibrée", "Prévision, KPI, dépenses et comptes"],
+                    ["pilot", "Pilotage", "Une vue plus analytique", "KPI en grille et tendance sur six mois"],
+                    ["actions", "Priorités", "Une vue orientée décisions", "Alertes et prochaines actions en premier"],
+                  ] as const).map(([value, label, description, detail]) => (
+                    <button
+                      key={value}
+                      type="button"
+                      role="radio"
+                      aria-checked={overviewVariant === value}
+                      className={overviewVariant === value ? "selected" : ""}
+                      onClick={() => setOverviewVariant(value)}
+                    >
+                      <span className="overview-layout-check">{overviewVariant === value ? "✓" : ""}</span>
+                      <span><b>{label}</b><small>{description}</small><em>{detail}</em></span>
+                    </button>
+                  ))}
+                </div>
+                <h4 className="overview-kpi-settings-title">Indicateurs affichés</h4>
+                <p className="muted">Au moins un indicateur reste toujours visible.</p>
                 <div className="overview-settings-grid">
                   {overviewKpis.map((kpi) => (
                     <label key={kpi.key} className={visibleOverviewKpis.includes(kpi.key) ? "selected" : ""}>
