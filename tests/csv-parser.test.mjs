@@ -125,4 +125,8 @@ test("categorizes common merchants from imported bank labels", () => {
     { category: "Loisirs", confident: true },
     { category: "Vêtements", confident: true },
   ]);
+  assert.deepEqual(
+    result.rows.map(({ reason }) => reason || null),
+    ["Restaurant ou sortie", null, null, "Bar", null],
+  );
 });

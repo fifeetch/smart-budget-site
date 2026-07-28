@@ -32,6 +32,7 @@ import {
 } from "firebase/firestore";
 import { auth, db, firebaseReady } from "@/lib/firebase";
 import { budgetStatus, chunkItems, currentLocalMonth, isRecurringPeriodDue } from "@/lib/budget-utils.mjs";
+import { transactionMatchesBudgetPlan as matchesBudgetPlan } from "@/lib/budget-matching.mjs";
 import { decodeBankCsvFile, parseBankCsv } from "@/lib/csv.mjs";
 
 type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "budgetPlan" | "reset" | "recurring" | "undoHistory" | null;
@@ -40,6 +41,7 @@ type CsvBalanceMode = "calculate" | "keep" | "custom";
 type CsvImportKind = "bank" | "deferredCard";
 type TransactionFilter = "all" | "income" | "expense" | "review";
 type BudgetPlanScope = "monthly" | "annual";
+type BudgetTargetKind = "category" | "reason";
 type OverviewVariant = "essential" | "pilot" | "actions";
 type OverviewKpiKey = "available" | "income" | "expenses" | "forecast" | "budget" | "review" | "recurring" | "topCategory";
 type OverviewHeroMetric = "available" | "forecast" | "balance" | "budget";
@@ -91,6 +93,7 @@ type BudgetPlan = {
   scope: BudgetPlanScope;
   period: string;
   reason: string;
+  targetKind?: BudgetTargetKind;
   amount: number;
   createdBy?: string;
 };
@@ -299,18 +302,18 @@ Object.assign(operationReasons, {
   ],
 });
 
-const budgetReasonOptions = [...new Map([
-  ...operationReasons.expense,
-  ...[...new Set(operationReasons.expense.map((reason) => reason.category))].map((category) => ({ label: category, category })),
-].map((reason) => [reason.label, reason])).values()];
+const expenseBudgetCategories = [...new Set(operationReasons.expense.map((reason) => reason.category))];
+
+function budgetTargetKind(plan: BudgetPlan): BudgetTargetKind {
+  return plan.targetKind || (expenseBudgetCategories.includes(plan.reason) ? "category" : "reason");
+}
+
+function budgetTargetLabel(plan: BudgetPlan) {
+  return budgetTargetKind(plan) === "category" ? "Famille" : (plan.type || "expense") === "income" ? "Source" : "Motif";
+}
 
 function transactionMatchesBudgetPlan(transaction: Transaction, plan: BudgetPlan) {
-  const planType = plan.type || "expense";
-  if (transaction.type !== planType || (transaction.confidence != null && transaction.confidence < 0.8)) return false;
-  if (transaction.reason === plan.reason) return true;
-  const definition = operationReasons[planType].find((item) => item.label === plan.reason);
-  if (!definition) return transaction.category === plan.reason;
-  return transaction.category === definition.category && (!transaction.reason || transaction.reason === transaction.category || transaction.reason === definition.category);
+  return matchesBudgetPlan(transaction, plan, operationReasons);
 }
 
 const chartColors = ["var(--green)", "var(--coral)", "var(--yellow)", "var(--mint)", "#7ca7d8", "#b58ad3", "#89b9a1"];
@@ -398,6 +401,7 @@ export default function BudgetApp() {
   const [editingBudgetPlanId, setEditingBudgetPlanId] = useState<string | null>(null);
   const [budgetPlanScopeDraft, setBudgetPlanScopeDraft] = useState<BudgetPlanScope>("monthly");
   const [budgetPlanPeriodDraft, setBudgetPlanPeriodDraft] = useState(() => currentLocalMonth());
+  const [budgetPlanTypeDraft, setBudgetPlanTypeDraft] = useState<TransactionType>("expense");
   const [budgetViewScope, setBudgetViewScope] = useState<BudgetPlanScope>("monthly");
   const [budgetViewPeriod, setBudgetViewPeriod] = useState(() => currentLocalMonth());
   const [selectedBudgetPlanId, setSelectedBudgetPlanId] = useState<string | null>(null);
@@ -732,7 +736,7 @@ export default function BudgetApp() {
     const candidates = budgetPlans.filter((plan) => plan.scope === budgetViewScope);
     const byReason = new Map<string, BudgetPlan>();
     candidates.forEach((plan) => {
-      const key = `${plan.type || "expense"}:${plan.reason}`;
+      const key = `${plan.type || "expense"}:${budgetTargetKind(plan)}:${plan.reason}`;
       const current = byReason.get(key);
       const isBeforeOrAtView = plan.period <= budgetViewPeriod;
       const currentBeforeOrAtView = current ? current.period <= budgetViewPeriod : false;
@@ -773,7 +777,7 @@ export default function BudgetApp() {
   const forecastPlans = (() => {
     const latestByReason = new Map<string, BudgetPlan>();
     budgetPlans.filter((plan) => plan.scope === "monthly" && plan.period <= selectedPeriod).forEach((plan) => {
-      const key = `${plan.type || "expense"}:${plan.reason}`;
+      const key = `${plan.type || "expense"}:${budgetTargetKind(plan)}:${plan.reason}`;
       const current = latestByReason.get(key);
       if (!current || plan.period > current.period) latestByReason.set(key, plan);
     });
@@ -1703,6 +1707,7 @@ export default function BudgetApp() {
     setEditingBudgetPlanId(plan?.id || null);
     setBudgetPlanScopeDraft(plan?.scope || budgetViewScope);
     setBudgetPlanPeriodDraft(plan?.period || budgetViewPeriod);
+    setBudgetPlanTypeDraft(plan?.type || "expense");
     setModal("budgetPlan");
   };
 
@@ -1712,10 +1717,12 @@ export default function BudgetApp() {
     const type = String(data.get("type") || "expense") as TransactionType;
     const scope = String(data.get("scope") || budgetPlanScopeDraft) as BudgetPlanScope;
     const period = String(data.get("period") || budgetPlanPeriodDraft);
-    const reason = String(data.get("reason") || "");
+    const [targetKindValue, ...targetParts] = String(data.get("target") || "").split(":");
+    const targetKind = targetKindValue as BudgetTargetKind;
+    const reason = targetParts.join(":");
     const amount = Number(String(data.get("amount") || "").replace(",", "."));
     const periodIsValid = scope === "monthly" ? /^\d{4}-\d{2}$/.test(period) : /^\d{4}$/.test(period);
-    if (!reason || !periodIsValid || !amount || amount <= 0) {
+    if (!reason || !["category", "reason"].includes(targetKind) || !periodIsValid || !amount || amount <= 0) {
       setToast("Indiquez un motif, une période et un montant valides.");
       return;
     }
@@ -1726,6 +1733,7 @@ export default function BudgetApp() {
       scope,
       period,
       reason,
+      targetKind,
       amount,
       createdBy: existing?.createdBy || user?.uid || "demo",
     };
@@ -1746,6 +1754,7 @@ export default function BudgetApp() {
         scope: plan.scope,
         period: plan.period,
         reason: plan.reason,
+        targetKind: plan.targetKind,
         amount: plan.amount,
         createdBy: plan.createdBy,
         ...(existing ? {} : { createdAt: Timestamp.now() }),
@@ -2489,7 +2498,7 @@ export default function BudgetApp() {
             <div className="budget-kpi-grid budget-kpi-grid-four"><article className="analysis-card"><span>Revenus prévus</span><strong>{money.format(plannedIncomeTotal)}</strong><small>Réel : {money.format(plannedIncomeActual)}</small></article><article className="analysis-card"><span>Charges prévues</span><strong>{money.format(plannedBudgetTotal)}</strong><small>Réel : {money.format(plannedBudgetSpent)}</small></article><article className="analysis-card living-remainder-card"><span>Reste à vivre</span><strong>{money.format(plannedLivingRemainder)}</strong><small>Revenus prévus − charges prévues</small></article><article className="analysis-card reserve-card"><span>Marge après dépassements</span><strong>{money.format(livingReserveRemaining)}</strong><small>{money.format(plannedLivingRemainder)} − {money.format(livingReserveUsed)} de dépassements</small></article></div>
             <div className="budget-tables-grid">
               <article className="budget-table-card"><div className="panel-head"><div><h3 className="panel-title">Revenus prévisionnels</h3><p className="muted">Les entrées attendues sur la période.</p></div></div><div className="budget-table-scroll"><table className="budget-table"><thead><tr><th>Motif</th><th>Prévu</th><th>Réel</th><th>Écart</th></tr></thead><tbody>{incomeBudgetProgress.length ? incomeBudgetProgress.map((plan) => <tr className="budget-table-row-clickable" tabIndex={0} role="button" onClick={() => openBudgetPlanEditor(plan)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openBudgetPlanEditor(plan); } }} key={plan.id}><td><span className="budget-table-label"><span className="budget-plan-icon">{categoryIcons[operationReasons.income.find((item) => item.label === plan.reason)?.category || plan.reason] || "💶"}</span>{plan.reason}</span></td><td>{money.format(plan.amount)}</td><td>{money.format(plan.spent)}</td><td className={plan.spent >= plan.amount ? "budget-positive" : "budget-negative"}>{plan.spent >= plan.amount ? "+" : "−"}{money.format(Math.abs(plan.spent - plan.amount))}</td></tr>) : <tr><td colSpan={4} className="budget-table-empty">Aucun revenu prévisionnel. Ajoutez-en un pour commencer.</td></tr>}</tbody><tfoot><tr><th>Total</th><th>{money.format(plannedIncomeTotal)}</th><th>{money.format(plannedIncomeActual)}</th><th>{money.format(plannedIncomeActual - plannedIncomeTotal)}</th></tr></tfoot></table></div></article>
-              <article className="budget-table-card"><div className="panel-head"><div><h3 className="panel-title">Dépenses prévisionnelles</h3><p className="muted">Les plafonds qui alimentent les tuiles de suivi.</p></div></div><div className="budget-table-scroll"><table className="budget-table"><thead><tr><th>Motif</th><th>Prévu</th><th>Réel</th><th>Écart</th></tr></thead><tbody>{expenseBudgetProgress.length ? expenseBudgetProgress.map((plan) => <tr className={`budget-table-row-clickable ${budgetStatus(plan.percent)}`} tabIndex={0} role="button" onClick={() => openBudgetPlanEditor(plan)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openBudgetPlanEditor(plan); } }} key={plan.id}><td><span className="budget-table-label"><span className="budget-plan-icon">{categoryIcons[operationReasons.expense.find((item) => item.label === plan.reason)?.category || plan.reason] || "📌"}</span>{plan.reason}</span></td><td>{money.format(plan.amount)}</td><td>{money.format(plan.spent)}</td><td className={plan.spent <= plan.amount ? "budget-positive" : "budget-negative"}>{plan.spent <= plan.amount ? "+" : "−"}{money.format(Math.abs(plan.amount - plan.spent))}</td></tr>) : <tr><td colSpan={4} className="budget-table-empty">Aucune dépense prévisionnelle. Ajoutez un plafond par motif.</td></tr>}</tbody><tfoot><tr><th>Total</th><th>{money.format(plannedBudgetTotal)}</th><th>{money.format(plannedBudgetSpent)}</th><th>{money.format(plannedBudgetRemaining)}</th></tr></tfoot></table></div></article>
+              <article className="budget-table-card"><div className="panel-head"><div><h3 className="panel-title">Dépenses prévisionnelles</h3><p className="muted">Les plafonds qui alimentent les tuiles de suivi.</p></div></div><div className="budget-table-scroll"><table className="budget-table"><thead><tr><th>Budget</th><th>Prévu</th><th>Réel</th><th>Écart</th></tr></thead><tbody>{expenseBudgetProgress.length ? expenseBudgetProgress.map((plan) => <tr className={`budget-table-row-clickable ${budgetStatus(plan.percent)}`} tabIndex={0} role="button" onClick={() => openBudgetPlanEditor(plan)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); openBudgetPlanEditor(plan); } }} key={plan.id}><td><span className="budget-table-label"><span className="budget-plan-icon">{categoryIcons[operationReasons.expense.find((item) => item.label === plan.reason)?.category || plan.reason] || "📌"}</span><span>{plan.reason}<small className={`budget-target-badge ${budgetTargetKind(plan)}`}>{budgetTargetLabel(plan)}</small></span></span></td><td>{money.format(plan.amount)}</td><td>{money.format(plan.spent)}</td><td className={plan.spent <= plan.amount ? "budget-positive" : "budget-negative"}>{plan.spent <= plan.amount ? "+" : "−"}{money.format(Math.abs(plan.amount - plan.spent))}</td></tr>) : <tr><td colSpan={4} className="budget-table-empty">Aucune dépense prévisionnelle. Ajoutez un plafond par famille ou par motif.</td></tr>}</tbody><tfoot><tr><th>Total</th><th>{money.format(plannedBudgetTotal)}</th><th>{money.format(plannedBudgetSpent)}</th><th>{money.format(plannedBudgetRemaining)}</th></tr></tfoot></table></div></article>
             </div>
             <div className="budget-status-legend" aria-label="Légende des couleurs"><span className="safe">● Moins de 75 %</span><span className="warning">● De 75 à 100 %</span><span className="over">● Dès 101 %</span></div>
             <div className="budget-report-note"><span className="budget-plan-icon">↻</span><span>La marge après dépassements correspond au reste à vivre prévisionnel de {money.format(plannedLivingRemainder)}, diminué des {money.format(livingReserveUsed)} déjà dépensés au-delà des budgets.</span><button className="btn btn-soft" onClick={() => setActiveNav("Analyse")}>Voir les tuiles de suivi</button></div>
@@ -2498,7 +2507,7 @@ export default function BudgetApp() {
 
         {activeNav === "Analyse" && (
           <section className="view-section analysis-page">
-            <div className="page-heading"><div><h2 className="panel-title">{selectedBudgetPlan ? `Détail du budget — ${selectedBudgetPlan.reason}` : "Suivi du budget"}</h2><p className="muted">{selectedBudgetPlan ? "Analyse détaillée du motif sélectionné." : "Les tuiles sont calculées à partir du budget prévisionnel et des opérations enregistrées."}</p></div><div className="budget-view-toolbar"><div className="segmented budget-scope-switch"><button className={budgetViewScope === "monthly" ? "active" : ""} onClick={() => { setBudgetViewScope("monthly"); setBudgetViewPeriod(selectedPeriod); }}>Mensuel</button><button className={budgetViewScope === "annual" ? "active" : ""} onClick={() => { setBudgetViewScope("annual"); setBudgetViewPeriod(selectedPeriod.slice(0, 4)); }}>Annuel</button></div><label className="label budget-period-field"><input className="field" type={budgetViewScope === "monthly" ? "month" : "number"} value={budgetViewPeriod} onChange={(event) => setBudgetViewPeriod(event.target.value)} /></label></div></div>
+            <div className="page-heading"><div><h2 className="panel-title">{selectedBudgetPlan ? `Détail du budget — ${selectedBudgetPlan.reason}` : "Suivi du budget"}</h2><p className="muted">{selectedBudgetPlan ? `${budgetTargetLabel(selectedBudgetPlan)} suivi${budgetTargetKind(selectedBudgetPlan) === "category" ? "e" : ""} : seules les opérations de ce périmètre sont comptées.` : "Les tuiles sont calculées à partir du budget prévisionnel et des opérations enregistrées."}</p></div><div className="budget-view-toolbar"><div className="segmented budget-scope-switch"><button className={budgetViewScope === "monthly" ? "active" : ""} onClick={() => { setBudgetViewScope("monthly"); setBudgetViewPeriod(selectedPeriod); }}>Mensuel</button><button className={budgetViewScope === "annual" ? "active" : ""} onClick={() => { setBudgetViewScope("annual"); setBudgetViewPeriod(selectedPeriod.slice(0, 4)); }}>Annuel</button></div><label className="label budget-period-field"><input className="field" type={budgetViewScope === "monthly" ? "month" : "number"} value={budgetViewPeriod} onChange={(event) => setBudgetViewPeriod(event.target.value)} /></label></div></div>
             <section className={`cash-forecast analysis-cash-forecast card ${cashForecast < 0 ? "forecast-risk" : ""}`} aria-label="Prévision et alertes budgétaires">
               <div className="cash-forecast-main"><span className="cash-forecast-icon">↗</span><div><span>Prévision du solde en fin de période</span><strong>{money.format(cashForecast)}</strong><small>Solde actuel + revenus encore attendus − dépenses prévisionnelles restantes</small></div></div>
               <div className="budget-alert-panel">
@@ -2516,7 +2525,7 @@ export default function BudgetApp() {
             </> : <>
               <div className="budget-detail-kpis"><article className="analysis-card"><span>Dépenses de la période</span><strong>{money.format(budgetViewExpenses)}</strong><small>{analysisExpenseRows.length} motif(s) utilisé(s)</small></article><article className="analysis-card"><span>Revenus de la période</span><strong>{money.format(budgetViewIncome)}</strong><small>{analysisIncomeRows.length} source(s) enregistrée(s)</small></article><article className="analysis-card living-remainder-card"><span>Reste à vivre prévisionnel</span><strong>{money.format(plannedLivingRemainder)}</strong><small>Revenus prévus − charges prévues</small></article><article className="analysis-card reserve-card"><span>Marge après dépassements</span><strong>{money.format(livingReserveRemaining)}</strong><small>{money.format(plannedLivingRemainder)} − {money.format(livingReserveUsed)} de dépassements</small></article></div>
               <div className="budget-status-legend" aria-label="Légende des couleurs"><span className="safe">● Moins de 75 % — maîtrisé</span><span className="warning">● De 75 à 100 % — à surveiller</span><span className="over">● Dès 101 % — dépassé</span></div>
-              <div className="budget-tile-grid">{budgetCoverage.length ? budgetCoverage.map((plan) => <button className={`budget-tile ${budgetStatus(plan.percent)}`} key={plan.id} onClick={() => setSelectedBudgetPlanId(plan.id)}><div className="budget-tile-head"><span className="budget-plan-icon">{categoryIcons[operationReasons.expense.find((item) => item.label === plan.reason)?.category || plan.reason] || "📌"}</span><span><strong>{plan.reason}</strong><small>{money.format(plan.amount)} prévus</small></span><b>{plan.percent} %</b></div><div className="budget-status-label">{plan.percent > 100 ? `Dépassé de ${money.format(plan.overrun)}` : plan.percent >= 75 ? "À surveiller" : "Budget maîtrisé"}</div><div className="budget-plan-track"><span style={{ width: Math.min(100, plan.percent) + "%" }} /></div><div className="budget-tile-foot"><span>{money.format(plan.spent)} dépensés</span><strong>{plan.reserveUsed ? `${money.format(plan.reserveUsed)} couverts` : `${money.format(plan.coveredRemaining)} disponibles`}</strong></div></button>) : <div className="empty-state">Ajoutez une dépense prévisionnelle pour créer votre première tuile de suivi.</div>}</div>
+              <div className="budget-tile-grid">{budgetCoverage.length ? budgetCoverage.map((plan) => <button className={`budget-tile ${budgetStatus(plan.percent)}`} key={plan.id} onClick={() => setSelectedBudgetPlanId(plan.id)}><div className="budget-tile-head"><span className="budget-plan-icon">{categoryIcons[operationReasons.expense.find((item) => item.label === plan.reason)?.category || plan.reason] || "📌"}</span><span><strong>{plan.reason}</strong><small><span className={`budget-target-badge ${budgetTargetKind(plan)}`}>{budgetTargetLabel(plan)}</span>{money.format(plan.amount)} prévus</small></span><b>{plan.percent} %</b></div><div className="budget-status-label">{plan.percent > 100 ? `Dépassé de ${money.format(plan.overrun)}` : plan.percent >= 75 ? "À surveiller" : "Budget maîtrisé"}</div><div className="budget-plan-track"><span style={{ width: Math.min(100, plan.percent) + "%" }} /></div><div className="budget-tile-foot"><span>{money.format(plan.spent)} dépensés</span><strong>{plan.reserveUsed ? `${money.format(plan.reserveUsed)} couverts` : `${money.format(plan.coveredRemaining)} disponibles`}</strong></div></button>) : <div className="empty-state">Ajoutez une dépense prévisionnelle pour créer votre première tuile de suivi.</div>}</div>
               <div className="analysis-columns"><article className="card panel"><div className="panel-head"><div><h3 className="panel-title">Où part l’argent ?</h3><p className="muted">Classement par motif précis.</p></div></div><div className="analysis-bars">{analysisExpenseRows.length ? analysisExpenseRows.map((row) => <div className="analysis-bar-row" key={row.label}><div><span>{categoryIcons[operationReasons.expense.find((item) => item.label === row.label)?.category || row.label] || "📌"} {row.label}</span><b>{money.format(row.value)}</b></div><div className="analysis-bar-track"><span style={{ width: row.percent + "%" }} /></div><small>{row.percent}% des dépenses</small></div>) : <div className="empty-state">Aucune dépense sur cette période.</div>}</div></article><article className="card panel"><div className="panel-head"><div><h3 className="panel-title">D’où viennent les revenus ?</h3><p className="muted">Répartition des entrées.</p></div></div><div className="analysis-bars">{analysisIncomeRows.length ? analysisIncomeRows.map((row) => <div className="analysis-bar-row income-bar" key={row.label}><div><span>{categoryIcons[operationReasons.income.find((item) => item.label === row.label)?.category || row.label] || "💶"} {row.label}</span><b>{money.format(row.value)}</b></div><div className="analysis-bar-track"><span style={{ width: row.percent + "%" }} /></div><small>{row.percent}% des revenus</small></div>) : <div className="empty-state">Aucun revenu sur cette période.</div>}</div></article></div>
             </>}
           </section>
@@ -2774,10 +2783,10 @@ export default function BudgetApp() {
           <form onSubmit={saveBudgetPlan}>
             <div className="auth-intro">Exemple : Concert / spectacle à 60 € par mois. Après 30 € dépensés, il restera 30 € et 50 % du budget.</div>
             <div className="form-grid">
-              <label className="label">Type<select className="field" name="type" defaultValue={editingBudgetPlanId ? budgetPlans.find((item) => item.id === editingBudgetPlanId)?.type || "expense" : "expense"}><option value="income">Revenu prévisionnel</option><option value="expense">Dépense prévisionnelle</option></select></label>
+              <label className="label">Type<select className="field" name="type" value={budgetPlanTypeDraft} onChange={(event) => setBudgetPlanTypeDraft(event.target.value as TransactionType)}><option value="income">Revenu prévisionnel</option><option value="expense">Dépense prévisionnelle</option></select></label>
               <label className="label">Périodicité<select className="field" name="scope" value={budgetPlanScopeDraft} onChange={(event) => { const scope = event.target.value as BudgetPlanScope; setBudgetPlanScopeDraft(scope); setBudgetPlanPeriodDraft(scope === "monthly" ? selectedPeriod : selectedPeriod.slice(0, 4)); }}><option value="monthly">Chaque mois</option><option value="annual">Pour l’année</option></select></label>
               <label className="label">{budgetPlanScopeDraft === "monthly" ? "Mois" : "Année"}<input className="field" name="period" type={budgetPlanScopeDraft === "monthly" ? "month" : "number"} min={budgetPlanScopeDraft === "annual" ? "2020" : undefined} max={budgetPlanScopeDraft === "annual" ? "2100" : undefined} value={budgetPlanPeriodDraft} onChange={(event) => setBudgetPlanPeriodDraft(event.target.value)} required /></label>
-              <label className="label wide">Motif concerné<select className="field" name="reason" defaultValue={editingBudgetPlanId ? budgetPlans.find((item) => item.id === editingBudgetPlanId)?.reason : "Concert / spectacle"}>{[...new Map([...budgetReasonOptions, ...operationReasons.income].map((reason) => [reason.label, reason])).values()].map((reason) => <option key={reason.label} value={reason.label}>{categoryIcons[reason.category] || "📌"} {reason.label}</option>)}</select></label>
+              <label className="label wide">Ce budget concerne<select className="field" name="target" defaultValue={editingBudgetPlanId ? `${budgetTargetKind(budgetPlans.find((item) => item.id === editingBudgetPlanId) as BudgetPlan)}:${budgetPlans.find((item) => item.id === editingBudgetPlanId)?.reason}` : budgetPlanTypeDraft === "expense" ? "reason:Concert / spectacle" : "reason:Salaire"}>{budgetPlanTypeDraft === "expense" ? <><optgroup label="Familles de dépenses">{expenseBudgetCategories.map((category) => <option key={`category-${category}`} value={`category:${category}`}>{categoryIcons[category] || "📁"} Toute la famille · {category}</option>)}</optgroup><optgroup label="Motifs précis">{operationReasons.expense.map((reason) => <option key={`reason-${reason.label}`} value={`reason:${reason.label}`}>{categoryIcons[reason.category] || "📌"} Uniquement · {reason.label}</option>)}</optgroup></> : <optgroup label="Sources de revenus">{operationReasons.income.map((reason) => <option key={`reason-${reason.label}`} value={`reason:${reason.label}`}>{categoryIcons[reason.category] || "💶"} {reason.label}</option>)}</optgroup>}</select><small className="field-help">{budgetPlanTypeDraft === "expense" ? "Une famille regroupe tous ses motifs. Un motif précis reste indépendant des autres." : "Choisissez la source de revenu à suivre."}</small></label>
               <label className="label amount-label wide">Montant prévu<span className="amount-wrap"><input className="field amount-input" name="amount" inputMode="decimal" defaultValue={editingBudgetPlanId ? budgetPlans.find((item) => item.id === editingBudgetPlanId)?.amount : ""} placeholder="60,00" required /><b>€</b></span></label>
             </div>
             <div className="form-actions">{editingBudgetPlanId && <button type="button" className="btn btn-danger" onClick={() => { const plan = budgetPlans.find((item) => item.id === editingBudgetPlanId); if (plan) void deleteBudgetPlan(plan).then((deleted) => { if (deleted) { setEditingBudgetPlanId(null); setModal(null); } }); }}>Supprimer</button>}<button type="button" className="btn btn-soft" onClick={() => { setEditingBudgetPlanId(null); setModal(null); }}>Annuler</button><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingBudgetPlanId ? "Enregistrer les modifications" : "Ajouter le budget"}</button></div>

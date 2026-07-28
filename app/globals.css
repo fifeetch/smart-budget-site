@@ -189,6 +189,9 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .budget-table thead th { color: var(--muted); font-size: 10px; font-weight: 700; }
 .budget-table tfoot th { color: var(--green); border-bottom: 0; font-weight: 800; }
 .budget-table-label { display: inline-flex; align-items: center; gap: 7px; }
+.budget-table-label > span:last-child { display: inline-flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.budget-target-badge { display: inline-flex; width: fit-content; padding: 2px 6px; border-radius: 999px; color: #245b49; background: #e7f1e9; font-size: 9px; font-weight: 800; line-height: 1.35; }
+.budget-target-badge.category { color: #735a13; background: #fff1bd; }
 .budget-table-label .budget-plan-icon { width: 25px; height: 25px; font-size: 14px; }
 .budget-table-empty { padding: 25px 10px !important; color: var(--muted); text-align: center !important; white-space: normal !important; }
 .budget-positive { color: var(--green-2); font-weight: 750; }
@@ -206,6 +209,7 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .budget-tile-head > span:nth-child(2) { display: grid; gap: 3px; min-width: 0; }
 .budget-tile-head strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .budget-tile-head small, .budget-tile-foot { color: var(--muted); font-size: 10px; }
+.budget-tile-head small { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .budget-tile-head > b { color: var(--green-2); font-size: 16px; }
 .budget-tile.budget-warning .budget-tile-head > b,
 .budget-tile.budget-warning .budget-tile-foot strong { color: var(--budget-warning); }
