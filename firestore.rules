@@ -19,7 +19,7 @@ service cloud.firestore {
       return data.name is string &&
         data.name.size() > 0 &&
         data.name.size() <= 120 &&
-        data.type is string &&
+        data.type in ['Courant', 'Livret', 'Épargne', 'Carte', 'Espèces'] &&
         validMoney(data.balance) &&
         data.visibility in ['shared', 'private'] &&
         data.ownerId is string;
