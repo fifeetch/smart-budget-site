@@ -496,9 +496,19 @@ export default function BudgetApp() {
     const manifestUrl = new URL(manifestLink?.href || "/manifest.webmanifest", window.location.href);
     const serviceWorkerUrl = new URL("sw.js", manifestUrl);
     const scopeUrl = new URL("./", serviceWorkerUrl);
-    navigator.serviceWorker.register(serviceWorkerUrl.pathname, { scope: scopeUrl.pathname }).catch(() => {
+    let reloadingForUpdate = false;
+    const handleControllerChange = () => {
+      if (reloadingForUpdate) return;
+      reloadingForUpdate = true;
+      window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener("controllerchange", handleControllerChange);
+    navigator.serviceWorker.register(serviceWorkerUrl.pathname, { scope: scopeUrl.pathname, updateViaCache: "none" }).then((registration) => {
+      void registration.update();
+    }).catch(() => {
       // L'application reste utilisable dans le navigateur si l'installation PWA est indisponible.
     });
+    return () => navigator.serviceWorker.removeEventListener("controllerchange", handleControllerChange);
   }, []);
 
   useEffect(() => {
@@ -2273,7 +2283,7 @@ export default function BudgetApp() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><span className="brand-mark">S</span><span>Smart Budget</span></div>
+        <div className="brand"><span className="brand-mark">S</span><span>Smart Budget</span><small className="brand-version">v2.1</small></div>
         <div className="household-pill"><small>Espace du foyer</small><strong>{user ? "Mon foyer" : "Foyer Démo"}</strong></div>
         <nav className="nav" aria-label="Navigation principale">
           {navigationItems.map(([icon, label]) => (
