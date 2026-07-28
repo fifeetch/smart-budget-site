@@ -1586,8 +1586,14 @@ export default function BudgetApp() {
         balance: account.balance,
         visibility: account.visibility,
         ownerId: account.ownerId,
-        ...(account.type === "Carte" && account.debitAccountId ? { debitAccountId: account.debitAccountId } : { debitAccountId: deleteField() }),
-        balanceHistory: arrayUnion({ date: balanceDate, balance: account.balance }),
+        ...(account.type === "Carte" && account.debitAccountId
+          ? { debitAccountId: account.debitAccountId }
+          : existing
+            ? { debitAccountId: deleteField() }
+            : {}),
+        balanceHistory: existing
+          ? arrayUnion({ date: balanceDate, balance: account.balance })
+          : [{ date: balanceDate, balance: account.balance }],
         balanceVerifiedAt: Timestamp.now(),
         ...(existing ? {} : { createdAt: Timestamp.now() }),
       }, { merge: Boolean(existing) });
