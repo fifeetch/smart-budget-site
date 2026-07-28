@@ -35,7 +35,7 @@ import { budgetStatus, chunkItems, currentLocalMonth, isRecurringPeriodDue } fro
 import { transactionMatchesBudgetPlan as matchesBudgetPlan } from "@/lib/budget-matching.mjs";
 import { decodeBankCsvFile, parseBankCsv } from "@/lib/csv.mjs";
 
-type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "budget" | "budgetPlan" | "reset" | "recurring" | "undoHistory" | null;
+type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "goalExpense" | "goalContribution" | "budget" | "budgetPlan" | "reset" | "recurring" | "undoHistory" | null;
 type TransactionType = "expense" | "income";
 type CsvBalanceMode = "calculate" | "keep" | "custom";
 type CsvImportKind = "bank" | "deferredCard";
@@ -84,7 +84,24 @@ type Goal = {
   saved: number;
   dueDate: string;
   monthly: number;
+  accountId?: string;
+  expenses?: GoalExpense[];
+  contributions?: GoalContribution[];
   schedule?: { date: string; amount: number }[];
+};
+
+type GoalExpense = {
+  id: string;
+  label: string;
+  amount: number;
+  icon?: string;
+};
+
+type GoalContribution = {
+  id: string;
+  label: string;
+  amount: number;
+  date: string;
 };
 
 type BudgetPlan = {
@@ -334,7 +351,7 @@ const navigationItems = [
 const demoAccounts: Account[] = [
   { id: "joint", name: "Compte joint", type: "Courant", balance: 2847.55, visibility: "shared", ownerId: "demo" },
   { id: "perso", name: "Mon compte perso", type: "Courant", balance: 1234.8, visibility: "private", ownerId: "demo" },
-  { id: "epargne", name: "Épargne projets", type: "Épargne", balance: 3680, visibility: "shared", ownerId: "demo" },
+  { id: "epargne", name: "Livret projets", type: "Livret", balance: 3680, visibility: "shared", ownerId: "demo" },
 ];
 
 const demoTransactions: Transaction[] = [
@@ -346,7 +363,26 @@ const demoTransactions: Transaction[] = [
 ];
 
 const demoGoals: Goal[] = [
-  { id: "vacances", name: "Vacances en Italie", target: 2400, saved: 960, dueDate: "2027-05-01", monthly: 160 },
+  {
+    id: "vacances",
+    name: "Vacances en Italie",
+    target: 2400,
+    saved: 960,
+    dueDate: "2027-05-01",
+    monthly: 160,
+    accountId: "epargne",
+    expenses: [
+      { id: "train", label: "Train et transports", amount: 420, icon: "🚆" },
+      { id: "hebergement", label: "Hébergement", amount: 1100, icon: "🛏️" },
+      { id: "restaurants", label: "Restaurants", amount: 500, icon: "🍽️" },
+      { id: "activites", label: "Activités", amount: 280, icon: "🎟️" },
+      { id: "imprevus", label: "Imprévus", amount: 100, icon: "☂️" },
+    ],
+    contributions: [
+      { id: "juillet", label: "Virement mensuel", amount: 160, date: "2026-07-15" },
+      { id: "juin", label: "Virement mensuel", amount: 160, date: "2026-06-15" },
+    ],
+  },
 ];
 
 const money = new Intl.NumberFormat("fr-FR", {
@@ -398,6 +434,8 @@ export default function BudgetApp() {
   const [operationPerson, setOperationPerson] = useState("");
   const [editingTransactionId, setEditingTransactionId] = useState<string | null>(null);
   const [editingGoalId, setEditingGoalId] = useState<string | null>(null);
+  const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
+  const [editingGoalExpenseId, setEditingGoalExpenseId] = useState<string | null>(null);
   const [editingBudgetPlanId, setEditingBudgetPlanId] = useState<string | null>(null);
   const [budgetPlanScopeDraft, setBudgetPlanScopeDraft] = useState<BudgetPlanScope>("monthly");
   const [budgetPlanPeriodDraft, setBudgetPlanPeriodDraft] = useState(() => currentLocalMonth());
@@ -1137,6 +1175,15 @@ export default function BudgetApp() {
     setModal("goal");
   };
 
+  const openGoalExpenseEditor = (expense?: GoalExpense) => {
+    setEditingGoalExpenseId(expense?.id || null);
+    setModal("goalExpense");
+  };
+
+  const openGoalContributionEditor = () => {
+    setModal("goalContribution");
+  };
+
   const openRecurringEditor = (item?: RecurringExpense) => {
     setEditingRecurringId(item?.id || null);
     setModal("recurring");
@@ -1567,6 +1614,9 @@ export default function BudgetApp() {
       saved,
       dueDate,
       monthly,
+      accountId: String(data.get("accountId") || ""),
+      expenses: existing?.expenses || [],
+      contributions: existing?.contributions || [],
       schedule,
     };
     if (!user) {
@@ -1588,6 +1638,9 @@ export default function BudgetApp() {
         saved: goal.saved,
         dueDate: goal.dueDate,
         monthly: goal.monthly,
+        accountId: goal.accountId || deleteField(),
+        expenses: goal.expenses || [],
+        contributions: goal.contributions || [],
         schedule: goal.schedule,
         ...(existing ? {} : { createdAt: Timestamp.now() }),
       }, { merge: Boolean(existing) });
@@ -1599,6 +1652,133 @@ export default function BudgetApp() {
       setToast("Le projet n’a pas pu être enregistré.");
     } finally {
       setIsSaving(false);
+    }
+  };
+
+  const saveGoalExpense = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const goal = goals.find((item) => item.id === selectedGoalId);
+    if (!goal) return;
+    const data = new FormData(event.currentTarget);
+    const amount = Number(String(data.get("amount") || "").replace(",", "."));
+    const label = String(data.get("label") || "").trim();
+    if (!label || !amount || amount <= 0) {
+      setToast("Indiquez un libellé et un montant valides.");
+      return;
+    }
+    const expense: GoalExpense = {
+      id: editingGoalExpenseId || `goal-expense-${Date.now()}`,
+      label,
+      amount,
+      icon: String(data.get("icon") || "📌"),
+    };
+    const expenses = editingGoalExpenseId
+      ? (goal.expenses || []).map((item) => item.id === editingGoalExpenseId ? expense : item)
+      : [...(goal.expenses || []), expense];
+    const target = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const months = Math.max(1, Math.ceil((new Date(goal.dueDate).getTime() - Date.now()) / (30.44 * 86400000)));
+    const monthly = Math.max(0, (target - goal.saved) / months);
+    if (!user) {
+      setGoals((current) => current.map((item) => item.id === goal.id ? { ...item, expenses, target, monthly } : item));
+      setEditingGoalExpenseId(null);
+      setModal(null);
+      setToast(editingGoalExpenseId ? "Poste de dépense modifié." : "Poste de dépense ajouté au projet.");
+      return;
+    }
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      await setDoc(doc(db, "households", householdId, "goals", goal.id), { expenses, target, monthly }, { merge: true });
+      setEditingGoalExpenseId(null);
+      setModal(null);
+      setToast(editingGoalExpenseId ? "Poste de dépense modifié." : "Poste de dépense ajouté au projet.");
+    } catch (error) {
+      console.error("Enregistrement du poste de dépense impossible", error);
+      setToast("Le poste de dépense n’a pas pu être enregistré.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const deleteGoalExpense = async (goal: Goal, expense: GoalExpense) => {
+    if (!window.confirm(`Supprimer le poste « ${expense.label} » ?`)) return;
+    const expenses = (goal.expenses || []).filter((item) => item.id !== expense.id);
+    const target = expenses.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const months = Math.max(1, Math.ceil((new Date(goal.dueDate).getTime() - Date.now()) / (30.44 * 86400000)));
+    const monthly = Math.max(0, (target - goal.saved) / months);
+    if (!user) {
+      setGoals((current) => current.map((item) => item.id === goal.id ? { ...item, expenses, target, monthly } : item));
+      setToast("Poste de dépense supprimé.");
+      return;
+    }
+    if (!db || !householdId) return;
+    try {
+      await setDoc(doc(db, "households", householdId, "goals", goal.id), { expenses, target, monthly }, { merge: true });
+      setToast("Poste de dépense supprimé.");
+    } catch (error) {
+      console.error("Suppression du poste de dépense impossible", error);
+      setToast("Le poste de dépense n’a pas pu être supprimé.");
+    }
+  };
+
+  const addGoalContribution = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const goal = goals.find((item) => item.id === selectedGoalId);
+    if (!goal) return;
+    const data = new FormData(event.currentTarget);
+    const amount = Number(String(data.get("amount") || "").replace(",", "."));
+    if (!amount || amount <= 0) {
+      setToast("Indiquez un montant de versement valide.");
+      return;
+    }
+    const contribution: GoalContribution = {
+      id: `goal-contribution-${Date.now()}`,
+      label: String(data.get("label") || "Versement").trim(),
+      amount,
+      date: String(data.get("date") || new Date().toISOString().slice(0, 10)),
+    };
+    const contributions = [contribution, ...(goal.contributions || [])];
+    const saved = Number(goal.saved || 0) + amount;
+    const months = Math.max(1, Math.ceil((new Date(goal.dueDate).getTime() - Date.now()) / (30.44 * 86400000)));
+    const monthly = Math.max(0, (goal.target - saved) / months);
+    if (!user) {
+      setGoals((current) => current.map((item) => item.id === goal.id ? { ...item, contributions, saved, monthly } : item));
+      setModal(null);
+      setToast("Versement ajouté au projet.");
+      return;
+    }
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      await setDoc(doc(db, "households", householdId, "goals", goal.id), { contributions, saved, monthly }, { merge: true });
+      setModal(null);
+      setToast("Versement ajouté au projet.");
+    } catch (error) {
+      console.error("Enregistrement du versement impossible", error);
+      setToast("Le versement n’a pas pu être enregistré.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const deleteGoalContribution = async (goal: Goal, contribution: GoalContribution) => {
+    if (!window.confirm(`Supprimer le versement de ${money.format(contribution.amount)} ?`)) return;
+    const contributions = (goal.contributions || []).filter((item) => item.id !== contribution.id);
+    const saved = Math.max(0, Number(goal.saved || 0) - Number(contribution.amount || 0));
+    const months = Math.max(1, Math.ceil((new Date(goal.dueDate).getTime() - Date.now()) / (30.44 * 86400000)));
+    const monthly = Math.max(0, (goal.target - saved) / months);
+    if (!user) {
+      setGoals((current) => current.map((item) => item.id === goal.id ? { ...item, contributions, saved, monthly } : item));
+      setToast("Versement supprimé.");
+      return;
+    }
+    if (!db || !householdId) return;
+    try {
+      await setDoc(doc(db, "households", householdId, "goals", goal.id), { contributions, saved, monthly }, { merge: true });
+      setToast("Versement supprimé.");
+    } catch (error) {
+      console.error("Suppression du versement impossible", error);
+      setToast("Le versement n’a pas pu être supprimé.");
     }
   };
 
@@ -1674,12 +1854,14 @@ export default function BudgetApp() {
     if (!window.confirm(`Supprimer le projet « ${goal.name} » ?`)) return;
     if (!user) {
       setGoals((current) => current.filter((item) => item.id !== goal.id));
+      if (selectedGoalId === goal.id) setSelectedGoalId(null);
       setToast("Projet supprimé.");
       return;
     }
     if (!db || !householdId) return;
     try {
       await deleteDoc(doc(db, "households", householdId, "goals", goal.id));
+      if (selectedGoalId === goal.id) setSelectedGoalId(null);
       setToast("Projet supprimé.");
     } catch (error) {
       console.error("Suppression du projet impossible", error);
@@ -2061,6 +2243,8 @@ export default function BudgetApp() {
   const editingTransaction = editingTransactionId ? transactions.find((item) => item.id === editingTransactionId) : undefined;
   const editingAccount = editingAccountId ? accounts.find((item) => item.id === editingAccountId) : undefined;
   const editingGoal = editingGoalId ? goals.find((item) => item.id === editingGoalId) : undefined;
+  const selectedGoal = selectedGoalId ? goals.find((item) => item.id === selectedGoalId) : undefined;
+  const editingGoalExpense = selectedGoal?.expenses?.find((item) => item.id === editingGoalExpenseId);
 
   const renderUndoHistoryPanel = () => (
     <section className="undo-history-panel" aria-label="Dernières modifications annulables">
@@ -2553,22 +2737,66 @@ export default function BudgetApp() {
         )}
 
         {activeNav === "Projets" && (
-          <section className="card goals-banner view-section">
-            <div>
-              <h2 className="panel-title">Dépenses futures et projets</h2>
-              <p>Préparez vos vacances, travaux ou achats grâce à une mensualité conseillée.</p>
-              <div className="goal-list goals-view">
-                {goals.length ? goals.map((goal) => (
-                  <div className="goal-row" key={goal.id}>
-                    <div className="goal-title-row"><strong>{goal.name}</strong><span>{money.format(goal.saved)} / {money.format(goal.target)}</span></div>
-                    <div className="progress"><span style={{ width: `${Math.min(100, (goal.saved / goal.target) * 100)}%` }} /></div>
-                    <div className="goal-footer"><div className="muted">{money.format(goal.monthly)} / mois conseillé · objectif {displayDate.format(new Date(goal.dueDate))}</div><div className="row-actions"><button onClick={() => openGoalEditor(goal)}>Modifier</button><button className="danger-link" onClick={() => deleteGoal(goal)}>Supprimer</button></div></div>
-                    <small className="muted goal-schedule">Échéancier : {(goal.schedule || []).slice(0, 4).map((entry) => `${entry.date} ${money.format(entry.amount)}`).join(" · ")}{(goal.schedule || []).length > 4 ? " · …" : ""}</small>
+          <section className="projects-view view-section">
+            {selectedGoal ? (
+              <>
+                <button className="project-back" onClick={() => setSelectedGoalId(null)}>← Tous les projets</button>
+                <div className="project-detail-head">
+                  <div>
+                    <span className="overview-eyebrow">Projet</span>
+                    <h2>{selectedGoal.name}</h2>
+                    <p>Objectif : {fullDisplayDate.format(new Date(`${selectedGoal.dueDate}T12:00:00`))}</p>
                   </div>
-                )) : <div className="empty-state">Aucun projet planifié.</div>}
-              </div>
-            </div>
-            <button className="btn btn-lime" onClick={() => openGoalEditor()}>＋ Nouveau projet</button>
+                  <div className="view-actions"><button className="btn btn-soft" onClick={() => openGoalEditor(selectedGoal)}>Modifier</button><button className="btn btn-primary" onClick={openGoalContributionEditor}>＋ Ajouter un versement</button></div>
+                </div>
+                <div className="project-kpis">
+                  <article><span>Montant cible</span><strong>{money.format(selectedGoal.target)}</strong></article>
+                  <article><span>Déjà épargné</span><strong>{money.format(selectedGoal.saved)}</strong></article>
+                  <article><span>Reste à financer</span><strong>{money.format(Math.max(0, selectedGoal.target - selectedGoal.saved))}</strong></article>
+                  <article><span>Livret associé</span><strong>{visibleAccounts.find((account) => account.id === selectedGoal.accountId)?.name || "Aucun livret"}</strong></article>
+                </div>
+                <div className="project-detail-grid">
+                  <div className="project-detail-side">
+                    <article className="card panel project-progress-card">
+                      <div className="panel-head"><h3 className="panel-title">Progression</h3><strong>{selectedGoal.target ? Math.min(100, Math.round((selectedGoal.saved / selectedGoal.target) * 100)) : 0} %</strong></div>
+                      <div className="project-progress-track"><span style={{ width: `${selectedGoal.target ? Math.min(100, (selectedGoal.saved / selectedGoal.target) * 100) : 0}%` }} /></div>
+                      <div className="project-progress-copy"><span>{money.format(selectedGoal.saved)} épargnés</span><b>{money.format(selectedGoal.monthly)} / mois conseillés</b></div>
+                    </article>
+                    <article className="card panel project-contributions">
+                      <div className="panel-head"><div><h3 className="panel-title">Versements récents</h3><p className="muted">Suivi séparé des fonds du projet</p></div><button className="text-button" onClick={openGoalContributionEditor}>＋ Ajouter</button></div>
+                      {(selectedGoal.contributions || []).length ? <div className="project-contribution-list">{(selectedGoal.contributions || []).map((contribution) => <div key={contribution.id}><span>🏦</span><div><strong>{contribution.label}</strong><small>{fullDisplayDate.format(new Date(`${contribution.date}T12:00:00`))}</small></div><b>＋ {money.format(contribution.amount)}</b><button aria-label={`Supprimer ${contribution.label}`} onClick={() => void deleteGoalContribution(selectedGoal, contribution)}>×</button></div>)}</div> : <div className="empty-state project-empty">Aucun versement détaillé pour le moment.</div>}
+                    </article>
+                  </div>
+                  <article className="card panel project-expenses">
+                    <div className="panel-head"><div><h3 className="panel-title">Postes de dépense</h3><p className="muted">Budget ponctuel propre à ce projet</p></div><button className="btn btn-soft" onClick={() => openGoalExpenseEditor()}>＋ Ajouter un poste</button></div>
+                    {(selectedGoal.expenses || []).length ? <div className="project-expense-list">{(selectedGoal.expenses || []).map((expense) => <div className="project-expense-row" key={expense.id}><span>{expense.icon || "📌"}</span><strong>{expense.label}</strong><b>{money.format(expense.amount)}</b><div className="row-actions"><button onClick={() => openGoalExpenseEditor(expense)}>Modifier</button><button className="danger-link" onClick={() => void deleteGoalExpense(selectedGoal, expense)}>Supprimer</button></div></div>)}<div className="project-expense-total"><strong>Total du projet</strong><b>{money.format((selectedGoal.expenses || []).reduce((sum, item) => sum + Number(item.amount || 0), 0))}</b></div></div> : <div className="empty-state project-empty">Ajoutez des postes comme le train, l’hébergement ou les activités.</div>}
+                    <div className="project-budget-note">ⓘ Ces postes appartiennent uniquement à ce projet et ne sont pas des budgets mensuels.</div>
+                  </article>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="projects-head">
+                  <div><span className="overview-eyebrow">Planification</span><h2>Projets</h2><p>Préparez vos envies sans déséquilibrer votre budget.</p></div>
+                  <button className="btn btn-primary" onClick={() => openGoalEditor()}>＋ Nouveau projet</button>
+                </div>
+                <div className="projects-summary">
+                  <article className="card"><span>🐷</span><div><small>Total épargné</small><strong>{money.format(goals.reduce((sum, goal) => sum + Number(goal.saved || 0), 0))}</strong></div></article>
+                  <article className="card"><span>↗</span><div><small>Effort conseillé</small><strong>{money.format(goals.reduce((sum, goal) => sum + Number(goal.monthly || 0), 0))} / mois</strong></div></article>
+                </div>
+                {goals.length ? <div className="project-tiles">{goals.map((goal, index) => {
+                  const percent = goal.target ? Math.min(100, Math.round((goal.saved / goal.target) * 100)) : 0;
+                  const linkedAccount = visibleAccounts.find((account) => account.id === goal.accountId);
+                  return <article className={`project-tile card ${index % 3 === 2 ? "project-tile-accent" : ""}`} key={goal.id} role="button" tabIndex={0} onClick={() => setSelectedGoalId(goal.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setSelectedGoalId(goal.id); }}>
+                    <div className="project-tile-head"><span>{index % 3 === 0 ? "🧳" : index % 3 === 1 ? "🛠️" : "🎯"}</span><strong>{goal.name}</strong><b>›</b></div>
+                    <div className="project-tile-amount"><strong>{money.format(goal.saved)}</strong><span>sur {money.format(goal.target)}</span></div>
+                    <div className="project-tile-progress"><span style={{ width: `${percent}%` }} /></div>
+                    <div className="project-tile-meta"><span>{percent} %</span><span>Objectif {displayDate.format(new Date(`${goal.dueDate}T12:00:00`))}</span></div>
+                    <div className="project-tile-foot"><span>{linkedAccount ? `▣ ${linkedAccount.name}` : "Aucun livret associé"}</span><div className="row-actions"><button onClick={(event) => { event.stopPropagation(); openGoalEditor(goal); }}>Modifier</button><button className="danger-link" onClick={(event) => { event.stopPropagation(); void deleteGoal(goal); }}>Supprimer</button></div></div>
+                  </article>;
+                })}</div> : <div className="card empty-state">Aucun projet planifié. Créez votre premier projet pour commencer.</div>}
+              </>
+            )}
           </section>
         )}
 
@@ -2724,7 +2952,7 @@ export default function BudgetApp() {
           <form onSubmit={addAccount}>
             <div className="form-grid">
               <label className="label wide">Nom du compte<input className="field" name="name" placeholder="Ex. Compte joint" defaultValue={editingAccount?.name} required /></label>
-              <label className="label">Type<select className="field" name="type" value={accountTypeDraft} onChange={(event) => setAccountTypeDraft(event.target.value)}><option>Courant</option><option>Épargne</option><option>Carte</option><option>Espèces</option></select></label>
+              <label className="label">Type<select className="field" name="type" value={accountTypeDraft} onChange={(event) => setAccountTypeDraft(event.target.value)}><option>Courant</option><option>Livret</option><option>Épargne</option><option>Carte</option><option>Espèces</option></select><small className="field-help">{accountTypeDraft === "Livret" ? "Un livret peut recevoir et suivre les fonds d’un projet." : "Choisissez la nature du compte."}</small></label>
               {accountTypeDraft === "Carte" && <label className="label wide">Compte débité à la fin du mois<select className="field" name="debitAccountId" defaultValue={editingAccount?.debitAccountId || ""}><option value="">Sélectionner le compte débité</option>{visibleAccounts.filter((account) => account.id !== editingAccount?.id).map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select><small className="field-help">Les achats restent sur la carte jusqu’à la date de débit.</small></label>}
               <label className="label">Solde bancaire réel<input className="field" name="balance" inputMode="decimal" defaultValue={editingAccount?.balance ?? 0} /></label>
               <label className="label">Date du solde<input className="field" type="date" name="balanceDate" defaultValue={new Date().toISOString().slice(0, 10)} /></label>
@@ -2742,9 +2970,40 @@ export default function BudgetApp() {
               <label className="label wide">Nom du projet<input className="field" name="name" placeholder="Ex. Vacances d’été" defaultValue={editingGoal?.name} required /></label>
               <label className="label">Budget total<input className="field" name="target" inputMode="decimal" defaultValue={editingGoal?.target} required /></label>
               <label className="label">Déjà épargné<input className="field" name="saved" inputMode="decimal" defaultValue={editingGoal?.saved ?? 0} /></label>
-              <label className="label wide">Date prévue<input className="field" type="date" name="dueDate" defaultValue={editingGoal?.dueDate} required /></label>
+              <label className="label">Date prévue<input className="field" type="date" name="dueDate" defaultValue={editingGoal?.dueDate} required /></label>
+              <label className="label">Livret associé<select className="field" name="accountId" defaultValue={editingGoal?.accountId || ""}><option value="">Aucun livret associé</option>{visibleAccounts.filter((account) => account.type === "Livret" || account.type === "Épargne").map((account) => <option key={account.id} value={account.id}>{account.name} — {money.format(Number(account.balance || 0))}</option>)}</select><small className="field-help">Les fonds de ce projet seront suivis sur ce livret.</small></label>
             </div>
             <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingGoal ? "Enregistrer le projet" : "Créer et calculer la mensualité"}</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {modal === "goalExpense" && selectedGoal && (
+        <Modal title={editingGoalExpense ? "Modifier le poste de dépense" : "Ajouter un poste de dépense"} onClose={() => { setEditingGoalExpenseId(null); setModal(null); }}>
+          <form onSubmit={saveGoalExpense}>
+            <p className="modal-context">Projet : <strong>{selectedGoal.name}</strong></p>
+            <div className="form-grid">
+              <label className="label wide">Libellé<input className="field" name="label" placeholder="Ex. Train et transports" defaultValue={editingGoalExpense?.label} required /></label>
+              <label className="label">Montant prévu<input className="field" name="amount" inputMode="decimal" placeholder="420,00" defaultValue={editingGoalExpense?.amount} required /></label>
+              <label className="label">Icône<select className="field" name="icon" defaultValue={editingGoalExpense?.icon || "📌"}><option>🚆</option><option>🚗</option><option>✈️</option><option>🛏️</option><option>🍽️</option><option>🎟️</option><option>🛠️</option><option>🛍️</option><option>☂️</option><option>📌</option></select></label>
+            </div>
+            <div className="project-budget-note">Ce poste est ponctuel et appartient uniquement à ce projet. Il ne sera pas ajouté aux budgets mensuels.</div>
+            <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingGoalExpense ? "Enregistrer le poste" : "Ajouter au projet"}</button></div>
+          </form>
+        </Modal>
+      )}
+
+      {modal === "goalContribution" && selectedGoal && (
+        <Modal title="Ajouter un versement" onClose={() => setModal(null)}>
+          <form onSubmit={addGoalContribution}>
+            <p className="modal-context">Projet : <strong>{selectedGoal.name}</strong>{selectedGoal.accountId && <> · {visibleAccounts.find((account) => account.id === selectedGoal.accountId)?.name}</>}</p>
+            <div className="form-grid">
+              <label className="label wide">Libellé<input className="field" name="label" placeholder="Ex. Virement mensuel" defaultValue="Virement mensuel" required /></label>
+              <label className="label">Montant versé<input className="field" name="amount" inputMode="decimal" placeholder="160,00" required /></label>
+              <label className="label">Date<input className="field" type="date" name="date" defaultValue={new Date().toISOString().slice(0, 10)} required /></label>
+            </div>
+            <div className="project-budget-note">Ce versement augmente l’épargne suivie pour le projet. Le solde bancaire du livret reste celui renseigné dans « Comptes & cartes ».</div>
+            <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : "Ajouter le versement"}</button></div>
           </form>
         </Modal>
       )}
