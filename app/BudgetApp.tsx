@@ -2873,6 +2873,7 @@ export default function BudgetApp() {
         {[
           ["▦", "Vue d’ensemble"],
           ["▣", "Comptes & cartes"],
+          ["◎", "Projets"],
           ["＋", "Ajouter"],
           ["◫", "Budgets"],
           ["◌", "Analyse"],
@@ -2881,8 +2882,8 @@ export default function BudgetApp() {
           <button
             key={label}
             aria-label={label}
-            className={index === 2 ? "add-mobile" : activeNav === label ? "active" : ""}
-            onClick={() => index === 2 ? showMobileOperation() : setActiveNav(label)}
+            className={index === 3 ? "add-mobile" : activeNav === label ? "active" : ""}
+            onClick={() => index === 3 ? showMobileOperation() : setActiveNav(label)}
           >
             <span>{icon}</span><small>{label === "Vue d’ensemble" ? "Accueil" : label}</small>
           </button>

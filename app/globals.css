@@ -931,7 +931,7 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
   .row-actions button { padding-block: 4px; }
   .mobile-nav {
     position: fixed; z-index: 20; left: 10px; right: 10px; bottom: 9px; display: grid;
-    grid-template-columns: repeat(6,1fr); padding: 8px; border: 1px solid rgba(255,255,255,.15);
+    grid-template-columns: repeat(7,1fr); padding: 8px 6px; border: 1px solid rgba(255,255,255,.15);
     border-radius: 18px; background: rgba(23,79,61,.96); backdrop-filter: blur(10px);
   }
   .mobile-nav button {
@@ -939,7 +939,7 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
     background: transparent; padding: 5px 3px; border-radius: 11px; cursor: pointer;
   }
   .mobile-nav button span { font-size: 17px; }
-  .mobile-nav button small { max-width: 58px; overflow: hidden; text-overflow: ellipsis; font-size: 9px; white-space: nowrap; }
+  .mobile-nav button small { max-width: 50px; overflow: hidden; text-overflow: ellipsis; font-size: 8px; white-space: nowrap; }
   .mobile-nav button.active { color: var(--green); background: var(--lime); }
   .mobile-nav button.add-mobile {
     width: 46px; height: 46px; justify-self: center; margin-block: -9px; border: 4px solid var(--cream);
