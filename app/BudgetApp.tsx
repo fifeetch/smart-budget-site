@@ -35,7 +35,7 @@ import { budgetStatus, chunkItems, currentLocalMonth, isRecurringPeriodDue } fro
 import { transactionMatchesBudgetPlan as matchesBudgetPlan } from "@/lib/budget-matching.mjs";
 import { decodeBankCsvFile, parseBankCsv } from "@/lib/csv.mjs";
 
-type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "goalExpense" | "goalContribution" | "budget" | "budgetPlan" | "reset" | "recurring" | "undoHistory" | null;
+type ModalName = "auth" | "transaction" | "account" | "csv" | "goal" | "goalAccount" | "goalExpense" | "goalContribution" | "budget" | "budgetPlan" | "reset" | "recurring" | "undoHistory" | null;
 type TransactionType = "expense" | "income";
 type CsvBalanceMode = "calculate" | "keep" | "custom";
 type CsvImportKind = "bank" | "deferredCard";
@@ -1194,6 +1194,10 @@ export default function BudgetApp() {
     setModal("goalContribution");
   };
 
+  const openGoalAccountEditor = () => {
+    setModal("goalAccount");
+  };
+
   const openRecurringEditor = (item?: RecurringExpense) => {
     setEditingRecurringId(item?.id || null);
     setModal("recurring");
@@ -1772,6 +1776,36 @@ export default function BudgetApp() {
     } catch (error) {
       console.error("Enregistrement du versement impossible", error);
       setToast("Le versement n’a pas pu être enregistré.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const saveGoalAccount = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const goal = goals.find((item) => item.id === selectedGoalId);
+    if (!goal) return;
+    const data = new FormData(event.currentTarget);
+    const accountId = String(data.get("accountId") || "");
+    if (!accountId) {
+      setToast("Sélectionnez le livret à associer.");
+      return;
+    }
+    if (!user) {
+      setGoals((current) => current.map((item) => item.id === goal.id ? { ...item, accountId } : item));
+      setModal(null);
+      setToast("Livret associé au projet.");
+      return;
+    }
+    if (!db || !householdId) return;
+    setIsSaving(true);
+    try {
+      await setDoc(doc(db, "households", householdId, "goals", goal.id), { accountId }, { merge: true });
+      setModal(null);
+      setToast("Livret associé au projet.");
+    } catch (error) {
+      console.error("Association du livret impossible", error);
+      setToast("Le livret n’a pas pu être associé au projet.");
     } finally {
       setIsSaving(false);
     }
@@ -2769,7 +2803,11 @@ export default function BudgetApp() {
                   <article><span>Montant cible</span><strong>{money.format(selectedGoal.target)}</strong></article>
                   <article><span>Déjà épargné</span><strong>{money.format(selectedGoal.saved)}</strong></article>
                   <article><span>Reste à financer</span><strong>{money.format(Math.max(0, selectedGoal.target - selectedGoal.saved))}</strong></article>
-                  <article><span>Livret associé</span><strong>{visibleAccounts.find((account) => account.id === selectedGoal.accountId)?.name || "Aucun livret"}</strong></article>
+                  <button className="project-kpi-link" onClick={openGoalAccountEditor}>
+                    <span>Livret associé</span>
+                    <strong>{visibleAccounts.find((account) => account.id === selectedGoal.accountId)?.name || "Aucun livret"}</strong>
+                    <small>{selectedGoal.accountId ? "Changer le livret →" : "Cliquer pour associer →"}</small>
+                  </button>
                 </div>
                 <div className="project-detail-grid">
                   <div className="project-detail-side">
@@ -3007,6 +3045,24 @@ export default function BudgetApp() {
             <div className="project-budget-note">Ce poste est ponctuel et appartient uniquement à ce projet. Il ne sera pas ajouté aux budgets mensuels.</div>
             <div className="form-actions"><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Enregistrement…" : editingGoalExpense ? "Enregistrer le poste" : "Ajouter au projet"}</button></div>
           </form>
+        </Modal>
+      )}
+
+      {modal === "goalAccount" && selectedGoal && (
+        <Modal title="Associer un livret" onClose={() => setModal(null)}>
+          <p className="modal-context">Projet : <strong>{selectedGoal.name}</strong></p>
+          {visibleAccounts.some((account) => account.type === "Livret" || account.type === "Épargne") ? (
+            <form onSubmit={saveGoalAccount}>
+              <label className="label">Livret destiné à recevoir les fonds<select className="field" name="accountId" defaultValue={selectedGoal.accountId || ""} required><option value="">Sélectionner un livret</option>{visibleAccounts.filter((account) => account.type === "Livret" || account.type === "Épargne").map((account) => <option key={account.id} value={account.id}>{account.name} — {money.format(Number(account.balance || 0))}</option>)}</select></label>
+              <div className="project-budget-note">L’association permet d’identifier où sont conservés les fonds du projet. Elle ne déplace pas automatiquement d’argent entre vos comptes.</div>
+              <div className="form-actions"><button type="button" className="btn btn-soft" onClick={() => setModal(null)}>Annuler</button><button className="btn btn-primary" disabled={isSaving}>{isSaving ? "Association…" : "Associer ce livret"}</button></div>
+            </form>
+          ) : (
+            <div className="goal-account-empty">
+              <p>Aucun livret n’est encore disponible.</p>
+              <button className="btn btn-primary" onClick={() => openAccountEditor()}>＋ Créer un livret</button>
+            </div>
+          )}
         </Modal>
       )}
 

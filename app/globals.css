@@ -780,10 +780,13 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .project-tile-foot > span { overflow: hidden; padding: 5px 8px; border-radius: 999px; color: var(--green-2); background: #e8f3eb; font-size: 9px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }
 .project-back { width: fit-content; border: 0; padding: 0; color: var(--green-2); background: transparent; cursor: pointer; font-weight: 800; }
 .project-kpis { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
-.project-kpis article { display: grid; gap: 7px; padding: 17px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: 0 8px 22px rgba(27,66,51,.05); }
+.project-kpis article, .project-kpis > button { display: grid; gap: 7px; padding: 17px; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: 0 8px 22px rgba(27,66,51,.05); text-align: left; }
 .project-kpis span { color: var(--muted); font-size: 10px; }
 .project-kpis strong { overflow: hidden; color: var(--green); font-size: clamp(16px,2vw,22px); text-overflow: ellipsis; }
 .project-kpis article:nth-child(3) strong { color: var(--coral); }
+.project-kpi-link { position: relative; font: inherit; cursor: pointer; transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.project-kpi-link:hover, .project-kpi-link:focus-visible { transform: translateY(-2px); border-color: var(--green-2); box-shadow: 0 14px 28px rgba(27,66,51,.12); outline: none; }
+.project-kpi-link small { color: var(--green-2); font-size: 10px; font-weight: 800; }
 .project-detail-grid { display: grid; grid-template-columns: minmax(270px,.72fr) minmax(0,1.35fr); gap: 16px; align-items: start; }
 .project-detail-side { display: grid; gap: 16px; }
 .project-progress-card .panel-head { margin-bottom: 12px; }
@@ -809,6 +812,8 @@ button.analysis-card:hover { border-color: var(--green-2); transform: translateY
 .project-budget-note { margin-top: 14px; padding: 12px 14px; border: 1px solid #d7e5da; border-radius: 12px; color: var(--muted); background: #f3f8f3; font-size: 11px; line-height: 1.45; }
 .project-empty { padding: 24px 12px; }
 .modal-context { margin: 0 0 16px; color: var(--muted); font-size: 12px; }
+.goal-account-empty { display: grid; gap: 14px; justify-items: start; padding: 12px 0; }
+.goal-account-empty p { margin: 0; color: var(--muted); }
 
 @media (max-width: 980px) {
   .app-shell { grid-template-columns: 80px 1fr; }
